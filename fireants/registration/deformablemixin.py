@@ -47,7 +47,50 @@ class DeformableMixin:
     - fixed_images: BatchedImages object containing fixed images
     - moving_images: BatchedImages object containing moving images
     - get_warped_coordinates(): Method to get transformed coordinates
+    - warp: Deformation model (for deformation restriction)
     """
+
+    def setup_deformation_restriction(self, restrict_deformation, device):
+        """Setup deformation restriction for nonlinear registration.
+        
+        Args:
+            restrict_deformation (Optional[Union[List[float], tuple]]): Weights to restrict 
+                deformation along specific dimensions. For example, (1,1,0) restricts 3D 
+                deformation to first two dimensions. Must have same length as number of 
+                spatial dimensions.
+            device: PyTorch device for tensor creation
+        """
+        if restrict_deformation is not None:
+            if len(restrict_deformation) != self.dims:
+                raise ValueError(f'restrict_deformation must have length {self.dims}, got {len(restrict_deformation)}')
+            self.restrict_deformation = torch.tensor(restrict_deformation, dtype=torch.float32, device=device)
+        else:
+            self.restrict_deformation = None
+
+    def apply_deformation_restriction(self, warp_model):
+        """Apply deformation restrictions by masking gradients for restricted dimensions.
+        
+        This method multiplies the gradients of the warp parameters by the restriction mask,
+        effectively zeroing out gradients for dimensions where deformation should not occur.
+        
+        Args:
+            warp_model: The deformation model (e.g., self.warp, self.fwd_warp, self.rev_warp)
+        """
+        if self.restrict_deformation is not None:
+            # Handle different parameter names for different deformation types
+            param = None
+            if hasattr(warp_model, 'warp') and warp_model.warp.grad is not None:
+                param = warp_model.warp  # CompositiveWarp
+            elif hasattr(warp_model, 'velocity_field') and warp_model.velocity_field.grad is not None:
+                param = warp_model.velocity_field  # StationaryVelocity
+            
+            if param is not None:
+                # Warp/velocity field shape is [N, H, W, D, dims] for 3D or [N, H, W, dims] for 2D
+                # We need to mask the last dimension according to restriction
+                # Create proper shape for broadcasting: (..., 1, 1, ..., dims)
+                mask_shape = [1] * (param.grad.ndim - 1) + [self.dims]
+                mask = self.restrict_deformation.view(*mask_shape)
+                param.grad.data *= mask
 
     def save_as_ants_transforms(reg, filenames: Union[str, List[str]]):
         """Save deformation fields in ANTs-compatible format.
