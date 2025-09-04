@@ -67,6 +67,9 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             Defaults to None.
         blur (bool, optional): Whether to blur images during downsampling. Defaults to True.
         custom_loss (nn.Module, optional): Custom loss module. Defaults to None.
+        restrict_deformation (Optional[Union[List[float], tuple]], optional): Weights to restrict deformation 
+            along specific dimensions. For example, (1,1,0) restricts 3D deformation to first two dimensions.
+            Must have same length as number of spatial dimensions. Defaults to None.
 
     Attributes:
         warp: Deformation model (StationaryVelocity or CompositiveWarp)
@@ -96,7 +99,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 warp_reg: Optional[Union[Callable, nn.Module]] = None,
                 displacement_reg: Optional[Union[Callable, nn.Module]] = None,
                 blur: bool = True,
-                custom_loss: nn.Module = None, **kwargs) -> None:
+                custom_loss: nn.Module = None,
+                restrict_deformation: Optional[Union[List[float], tuple]] = None, **kwargs) -> None:
         # initialize abstract registration
         # nn.Module.__init__(self)
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, 
@@ -110,6 +114,9 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         # specify regularizations
         self.warp_reg = warp_reg
         self.displacement_reg = displacement_reg
+        
+        # handle deformation restriction using shared mixin functionality
+        self.setup_deformation_restriction(restrict_deformation, fixed_images.device)
         self.deformation_type = deformation_type
         # specify deformation type
         if deformation_type == 'geodesic':
@@ -309,6 +316,10 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 if self.warp_reg is not None:
                     loss = loss + self.warp_reg(moved_coords)
                 loss.backward()
+                
+                # apply deformation restrictions by masking gradients using shared functionality
+                self.apply_deformation_restriction(self.warp)
+                
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))
                 # optimize the velocity field
