@@ -70,6 +70,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             Defaults to None.
         blur (bool, optional): Whether to blur images during downsampling. Defaults to True.
         custom_loss (nn.Module, optional): Custom loss module. Defaults to None.
+        restrict_deformation (Optional[Union[List[float], tuple]], optional): Weights to restrict deformation 
+            along specific dimensions. For example, (1,1,0) restricts 3D deformation to first two dimensions.
+            Must have same length as number of spatial dimensions. Defaults to None.
 
     Attributes:
         fwd_warp: Forward deformation model (StationaryVelocity or CompositiveWarp)
@@ -95,7 +98,8 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 warp_reg: Optional[Union[Callable, nn.Module]] = None,
                 displacement_reg: Optional[Union[Callable, nn.Module]] = None,
                 blur: bool = True,
-                custom_loss: nn.Module = None, **kwargs) -> None:
+                custom_loss: nn.Module = None,
+                restrict_deformation: Optional[Union[List[float], tuple]] = None, **kwargs) -> None:
         # initialize abstract registration
         # nn.Module.__init__(self)
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, reduction=reduction,
@@ -108,6 +112,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         # specify regularizations
         self.warp_reg = warp_reg
         self.displacement_reg = displacement_reg
+        
+        # handle deformation restriction using shared mixin functionality
+        self.setup_deformation_restriction(restrict_deformation, fixed_images.device)
 
         if deformation_type == 'geodesic':
             fwd_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, 
@@ -140,6 +147,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             self.affine = torch.cat([init_affine.detach(), row], dim=1)
         else:
             raise ValueError('Invalid initial affine shape: {}'.format(init_affine.shape))
+
 
 
     def get_warped_coordinates(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None, displacement=False):
@@ -311,6 +319,11 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                     loss = loss + self.displacement_reg(fwd_warp_field) + self.displacement_reg(rev_warp_field)
                 # backward
                 loss.backward()
+                
+                # apply deformation restrictions by masking gradients using shared functionality
+                self.apply_deformation_restriction(self.fwd_warp)
+                self.apply_deformation_restriction(self.rev_warp)
+                
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))
                 # optimize the deformations
