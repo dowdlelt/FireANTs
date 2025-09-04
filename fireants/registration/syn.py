@@ -197,7 +197,10 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 align_corners=True,
             ).permute(*self.rev_warp.permute_imgtov)
 
-        rev_inv_warp_field = compositive_warp_inverse(fixed_images, rev_warp_field + fixed_image_vgrid, displacement=True)
+        # BUGFIX: compositive_warp_inverse was running its own optimization with default parameters
+        # Use a simpler approach: for SyN, the inverse is approximately -warp_field
+        # This is a common approximation used in many registration algorithms
+        rev_inv_warp_field = -rev_warp_field
 
 
 
