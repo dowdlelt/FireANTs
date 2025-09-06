@@ -162,7 +162,8 @@ def test_restricted_deformation_comparison():
     new_coords = registration_new.get_warped_coordinates(
         batch_fixed, batch_moving, displacement=True
     )
-    new_warped = registration_new.warp_images(batch_moving)
+    # Use the evaluate method to get the warped image
+    new_warped = registration_new.evaluate(batch_fixed, batch_moving)
 
     results["new"] = {
         "registration": registration_new,
@@ -194,7 +195,8 @@ def test_restricted_deformation_comparison():
     legacy_coords = registration_legacy.get_warped_coordinates(
         batch_fixed, batch_moving, displacement=True
     )
-    legacy_warped = registration_legacy.warp_images(batch_moving)
+    # Use the evaluate method to get the warped image
+    legacy_warped = registration_legacy.evaluate(batch_fixed, batch_moving)
 
     results["legacy"] = {
         "registration": registration_legacy,
