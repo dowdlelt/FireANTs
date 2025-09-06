@@ -142,7 +142,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         self.displacement_reg = displacement_reg
 
         # handle deformation restriction using shared mixin functionality
-        self.setup_deformation_restriction(restrict_deformation, fixed_images.device, force_legacy_behavior)
+        self.setup_deformation_restriction(
+            restrict_deformation, fixed_images.device, force_legacy_behavior
+        )
 
         if deformation_type == "geodesic":
             fwd_warp = StationaryVelocity(
@@ -302,19 +304,33 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
 
         # # smooth them out
         if self.smooth_warp_sigma > 0:
-            warp_gaussian = [
-                gaussian_1d(s, truncated=2)
-                for s in (
-                    torch.zeros(self.dims, device=fixed_arrays.device)
-                    + self.smooth_warp_sigma
+            if (
+                hasattr(self, "restrict_deformation")
+                and self.restrict_deformation is not None
+            ):
+                # Use anisotropic smoothing for warp fields
+                fwd_warp_field = self.apply_anisotropic_smoothing(
+                    fwd_warp_field, self.smooth_warp_sigma
                 )
-            ]
-            fwd_warp_field = separable_filtering(
-                fwd_warp_field.permute(*self.fwd_warp.permute_vtoimg), warp_gaussian
-            ).permute(*self.fwd_warp.permute_imgtov)
-            rev_inv_warp_field = separable_filtering(
-                rev_inv_warp_field.permute(*self.rev_warp.permute_vtoimg), warp_gaussian
-            ).permute(*self.rev_warp.permute_imgtov)
+                rev_inv_warp_field = self.apply_anisotropic_smoothing(
+                    rev_inv_warp_field, self.smooth_warp_sigma
+                )
+            else:
+                # Use standard isotropic smoothing
+                warp_gaussian = [
+                    gaussian_1d(s, truncated=2)
+                    for s in (
+                        torch.zeros(self.dims, device=fixed_arrays.device)
+                        + self.smooth_warp_sigma
+                    )
+                ]
+                fwd_warp_field = separable_filtering(
+                    fwd_warp_field.permute(*self.fwd_warp.permute_vtoimg), warp_gaussian
+                ).permute(*self.fwd_warp.permute_imgtov)
+                rev_inv_warp_field = separable_filtering(
+                    rev_inv_warp_field.permute(*self.rev_warp.permute_vtoimg),
+                    warp_gaussian,
+                ).permute(*self.rev_warp.permute_imgtov)
         # # compose the two warp fields
         composed_warp = compose_warp(
             fwd_warp_field, rev_inv_warp_field, fixed_image_vgrid
@@ -512,14 +528,27 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 )
                 # # smooth them out
                 if self.smooth_warp_sigma > 0:
-                    fwd_warp_field = separable_filtering(
-                        fwd_warp_field.permute(*self.fwd_warp.permute_vtoimg),
-                        warp_gaussian,
-                    ).permute(*self.fwd_warp.permute_imgtov)
-                    rev_inv_warp_field = separable_filtering(
-                        rev_inv_warp_field.permute(*self.rev_warp.permute_vtoimg),
-                        warp_gaussian,
-                    ).permute(*self.rev_warp.permute_imgtov)
+                    if (
+                        hasattr(self, "restrict_deformation")
+                        and self.restrict_deformation is not None
+                    ):
+                        # Use anisotropic smoothing for warp fields
+                        fwd_warp_field = self.apply_anisotropic_smoothing(
+                            fwd_warp_field, self.smooth_warp_sigma
+                        )
+                        rev_inv_warp_field = self.apply_anisotropic_smoothing(
+                            rev_inv_warp_field, self.smooth_warp_sigma
+                        )
+                    else:
+                        # Use standard isotropic smoothing
+                        fwd_warp_field = separable_filtering(
+                            fwd_warp_field.permute(*self.fwd_warp.permute_vtoimg),
+                            warp_gaussian,
+                        ).permute(*self.fwd_warp.permute_imgtov)
+                        rev_inv_warp_field = separable_filtering(
+                            rev_inv_warp_field.permute(*self.rev_warp.permute_vtoimg),
+                            warp_gaussian,
+                        ).permute(*self.rev_warp.permute_imgtov)
 
                 # # compose the two warp fields
                 composed_warp = compose_warp(

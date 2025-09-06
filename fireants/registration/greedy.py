@@ -143,7 +143,9 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         self.displacement_reg = displacement_reg
 
         # handle deformation restriction using shared mixin functionality
-        self.setup_deformation_restriction(restrict_deformation, fixed_images.device, force_legacy_behavior)
+        self.setup_deformation_restriction(
+            restrict_deformation, fixed_images.device, force_legacy_behavior
+        )
         self.deformation_type = deformation_type
         # specify deformation type
         if deformation_type == "geodesic":

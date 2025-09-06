@@ -1,0 +1,36 @@
+Traceback (most recent call last):
+  File "/Users/logan/local_bin/FireANTs/tests/simple_test.py", line 98, in test_restricted_deformation_comparison
+    raise FileNotFoundError("Using synthetic data")
+FileNotFoundError: Using synthetic data
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/logan/local_bin/FireANTs/tests/simple_test.py", line 462, in <module>
+    results = test_restricted_deformation_comparison()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/logan/local_bin/FireANTs/tests/simple_test.py", line 109, in test_restricted_deformation_comparison
+    fixed_img = Image(fixed_sitk, device=device)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/logan/local_bin/FireANTs/fireants/io/image.py", line 135, in __init__
+    self.torch2phy = torch.from_numpy(np.matmul(px2phy, torch2px)).to(device).float().unsqueeze_(0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Cannot convert a MPS Tensor to float64 dtype as the MPS framework doesn't support float64. Please use float32 instead.
+Exception ignored in: <function Image.__del__ at 0x10c978540>
+Traceback (most recent call last):
+  File "/Users/logan/local_bin/FireANTs/fireants/io/image.py", line 220, in __del__
+    del self.torch2phy
+        ^^^^^^^^^^^^^^
+AttributeError: 'Image' object has no attribute 'torch2phy'
+FireANTs Restricted Deformation Test
+==================================================
+============================================================
+RESTRICTED DEFORMATION COMPARISON TEST
+============================================================
+Using device: mps (Apple Silicon GPU)
+Creating synthetic test data...
+Creating synthetic test data...
+
+❌ Test failed with error: Cannot convert a MPS Tensor to float64 dtype as the MPS framework doesn't support float64. Please use float32 instead.
+
+Test completed!

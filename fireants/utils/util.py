@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Rohit Jena. All rights reserved.
-# 
+#
 # This file is part of FireANTs, distributed under the terms of
 # the FireANTs License version 1.0. A copy of the license can be found
 # in the LICENSE file at the root of this repository.
@@ -7,39 +7,45 @@
 # IMPORTANT: This code is part of FireANTs and its use, reproduction, or
 # distribution must comply with the full license terms, including:
 # - Maintaining all copyright notices and bibliography references
-# - Using only approved (re)-distribution channels 
+# - Using only approved (re)-distribution channels
 # - Proper attribution in derivative works
 #
-# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE 
+# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE
 
 
-from typing import List, Tuple
-from time import perf_counter
-from contextlib import contextmanager
-import torch
-from torch.nn import functional as F
-from fireants.losses.cc import gaussian_1d, separable_filtering
-from collections import deque
-import numpy as np
 import gc
-import os
 import inspect
 import logging
+import os
+from collections import deque
+from contextlib import contextmanager
+from time import perf_counter
+from typing import List, Tuple
+
+import numpy as np
+import torch
+from torch.nn import functional as F
+
+from fireants.losses.cc import gaussian_1d, separable_filtering
+
 logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 def get_tensor_memory_details() -> List[Tuple[torch.Tensor, float, str, str]]:
     """Get details of all tensors currently in memory.
-    
+
     Returns:
         List of tuples containing (tensor, size_in_mb, tensor_description, variable_name)
     """
     tensor_details = []
     for obj in gc.get_objects():
         try:
-            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+            if torch.is_tensor(obj) or (
+                hasattr(obj, "data") and torch.is_tensor(obj.data)
+            ):
                 tensor = obj if torch.is_tensor(obj) else obj.data
                 size_mb = tensor.element_size() * tensor.nelement() / (1024 * 1024)
                 description = f"{tensor.shape} {tensor.dtype} {tensor.device}"
@@ -53,7 +59,7 @@ def get_tensor_memory_details() -> List[Tuple[torch.Tensor, float, str, str]]:
                             break
                     if var_name != "unknown":
                         break
-                
+
                 tensor_details.append((tensor, size_mb, description, var_name))
         except Exception as e:
             # print(e)
@@ -68,6 +74,7 @@ def get_gpu_memory(clear: bool = False):
         gc.collect()
     torch.cuda.synchronize()
     return torch.cuda.memory_allocated() / 1024 / 1024
+
 
 class ConvergenceMonitor:
     def __init__(self, N, slope):
@@ -120,13 +127,14 @@ class ConvergenceMonitor:
         else:
             slope = self._compute_slope()
             return slope > self.slope
-    
+
     def reset(self):
         self.losses.clear()
 
 
 class catchtime:
-    ''' class to naively profile pieces of code '''
+    """class to naively profile pieces of code"""
+
     def __init__(self, str=None) -> None:
         self.str = str
 
@@ -136,21 +144,21 @@ class catchtime:
 
     def __exit__(self, type, value, traceback):
         self.time = perf_counter() - self.time
-        self.readout = f'{self.str}: Time: {self.time:.3f} seconds'
+        self.readout = f"{self.str}: Time: {self.time:.3f} seconds"
         print(self.readout)
 
 
 def _assert_check_scales_decreasing(scales: List[int]):
-    ''' Check if the list of scales is in decreasing order '''
-    for i in range(len(scales)-1):
-        if scales[i] <= scales[i+1]:
+    """Check if the list of scales is in decreasing order"""
+    for i in range(len(scales) - 1):
+        if scales[i] <= scales[i + 1]:
             raise ValueError("Scales must be in decreasing order")
 
 
 def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
-    ''' this backward hook will smooth out the gradient using the gaussians 
+    """this backward hook will smooth out the gradient using the gaussians
     has to be called with a partial function
-    '''
+    """
     # grad is of shape [B, H, W, D, dims]
     if len(grad.shape) == 5:
         permute_vtoimg = (0, 4, 1, 2, 3)
@@ -158,14 +166,55 @@ def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
     elif len(grad.shape) == 4:
         permute_vtoimg = (0, 3, 1, 2)
         permute_imgtov = (0, 2, 3, 1)
-    return separable_filtering(grad.permute(*permute_vtoimg), gaussians).permute(*permute_imgtov)
+    return separable_filtering(grad.permute(*permute_vtoimg), gaussians).permute(
+        *permute_imgtov
+    )
+
+
+def anisotropic_grad_smoothing_hook(
+    grad: torch.Tensor, gaussians: List[torch.Tensor], restriction_mask: torch.Tensor
+):
+    """Gradient smoothing hook that respects deformation restrictions.
+
+    This applies smoothing only to gradient components in unrestricted dimensions,
+    preventing coupling between restricted and unrestricted dimensions.
+
+    Args:
+        grad: Gradient tensor of shape [B, H, W, [D], dims]
+        gaussians: List of Gaussian kernels for spatial smoothing
+        restriction_mask: Tensor of shape [dims] with 1 for unrestricted, 0 for restricted
+    """
+    if len(grad.shape) == 5:
+        permute_vtoimg = (0, 4, 1, 2, 3)
+        permute_imgtov = (0, 2, 3, 4, 1)
+    elif len(grad.shape) == 4:
+        permute_vtoimg = (0, 3, 1, 2)
+        permute_imgtov = (0, 2, 3, 1)
+
+    # Apply smoothing component-wise, respecting restrictions
+    smoothed_components = []
+    for dim_idx in range(grad.shape[-1]):
+        component = grad[..., dim_idx : dim_idx + 1]  # [B, H, W, [D], 1]
+
+        if restriction_mask[dim_idx] == 1:
+            # This dimension is UNRESTRICTED (1 = allowed) - apply spatial smoothing
+            smoothed = separable_filtering(
+                component.permute(*permute_vtoimg), gaussians
+            ).permute(*permute_imgtov)
+        else:
+            # This dimension is RESTRICTED (0 = not allowed) - zero out gradients (don't smooth)
+            smoothed = component * 0
+
+        smoothed_components.append(smoothed)
+
+    return torch.cat(smoothed_components, dim=-1)
 
 
 def augment_filenames(filenames: List[str], batch_size: int, permitted_ext: List[str]):
-    '''
+    """
     If filenames is a single string, return a list of batch_size strings with the filename
     If filenames is a list of strings > 1, do nothing
-    '''
+    """
     # do nothing if batch_size == 1
     if batch_size == 1:
         return filenames
@@ -173,62 +222,87 @@ def augment_filenames(filenames: List[str], batch_size: int, permitted_ext: List
     if len(filenames) == 1:
         for ext in permitted_ext:
             if filenames[0].endswith(ext):
-                return [filenames[0].replace(ext, f"_{i}{ext}") for i in range(batch_size)]
+                return [
+                    filenames[0].replace(ext, f"_{i}{ext}") for i in range(batch_size)
+                ]
         raise ValueError(f"No permitted extension found in {filenames[0]}")
 
-    logger.warning(f"More than one filename provided, returning the same filename for all {batch_size} images")
+    logger.warning(
+        f"More than one filename provided, returning the same filename for all {batch_size} images"
+    )
     return filenames
 
+
 def check_correct_ext(filenames: List[str], permitted_ext: List[str]):
-    '''
+    """
     Check if the filenames have the correct extension
-    '''
+    """
     for filename in filenames:
         if not any(filename.endswith(ext) for ext in permitted_ext):
-            raise ValueError(f"File {filename} has an incorrect extension, must be one of {permitted_ext}")
+            raise ValueError(
+                f"File {filename} has an incorrect extension, must be one of {permitted_ext}"
+            )
     return True
 
+
 def any_extension(filename: str, permitted_ext: List[str]):
-    '''
+    """
     Check if the filename has any of the permitted extensions
-    '''
+    """
     return any(filename.endswith(ext) for ext in permitted_ext)
 
+
 def savetxt(filename: str, A: torch.Tensor, t: torch.Tensor):
-    '''
+    """
     Save the transform matrix and translation vector to a text file
-    '''
+    """
     dims = t.flatten().shape[0]
-    with open(filename, 'w') as f:
+    with open(filename, "w") as f:
         f.write("#Insight Transform File V1.0\n")
         f.write("#Transform 0\n")
         f.write("Transform: AffineTransform_float_3_3\n")
-        f.write("Parameters: " + " ".join(map(str, list(A.flatten()) + list(t.flatten()))) + "\n")
-        f.write("FixedParameters: " + " ".join(map(str, np.zeros((dims, 1)).flatten())) + "\n")
+        f.write(
+            "Parameters: "
+            + " ".join(map(str, list(A.flatten()) + list(t.flatten())))
+            + "\n"
+        )
+        f.write(
+            "FixedParameters: "
+            + " ".join(map(str, np.zeros((dims, 1)).flatten()))
+            + "\n"
+        )
+
 
 def compose_warp(warp1: torch.Tensor, warp2: torch.Tensor, grid: torch.Tensor):
-    '''
+    """
     warp1 and warp2 are displacement maps u(x) and v(x) of size [N, H, W, D, dims]
 
     phi1(x) = x + u(x)
     phi2(x) = x + v(x)
     (phi1 \circ phi2 )(x) = phi1(x + v(x)) = x + v(x) + u(x + v(x))
-    '''
+    """
     if len(warp1.shape) == 5:
         permute_vtoimg = (0, 4, 1, 2, 3)
         permute_imgtov = (0, 2, 3, 4, 1)
     elif len(warp1.shape) == 4:
         permute_vtoimg = (0, 3, 1, 2)
         permute_imgtov = (0, 2, 3, 1)
-    # compute u(x + v(x)) 
-    warp12 = F.grid_sample(warp1.permute(*permute_vtoimg), grid + warp2, mode='bilinear', align_corners=True).permute(*permute_imgtov)
+    # compute u(x + v(x))
+    warp12 = F.grid_sample(
+        warp1.permute(*permute_vtoimg),
+        grid + warp2,
+        mode="bilinear",
+        align_corners=True,
+    ).permute(*permute_imgtov)
     return warp2 + warp12
 
+
 def collate_fireants_fn(batch):
-    '''
-    collate batch of arbitrary lists/tuples/dicts with collating the Images into BatchedImages object 
-    '''
+    """
+    collate batch of arbitrary lists/tuples/dicts with collating the Images into BatchedImages object
+    """
     raise NotImplementedError
+
 
 def check_and_raise_cond(cond: bool, msg: str, error_type: Exception = ValueError):
     if not cond:

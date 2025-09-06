@@ -51,7 +51,9 @@ class DeformableMixin:
     - warp: Deformation model (for deformation restriction)
     """
 
-    def setup_deformation_restriction(self, restrict_deformation, device, force_legacy_behavior=False):
+    def setup_deformation_restriction(
+        self, restrict_deformation, device, force_legacy_behavior=False
+    ):
         """Setup deformation restriction for nonlinear registration.
 
         Args:
@@ -77,7 +79,7 @@ class DeformableMixin:
                 torch.all(self.restrict_deformation == 0)
                 or torch.all(self.restrict_deformation == 1)
             )
-            
+
             # Allow override for testing - force legacy behavior
             if force_legacy_behavior and natural_partial_restriction:
                 self.has_partial_restriction = False  # Force old behavior
@@ -156,8 +158,11 @@ class DeformableMixin:
         Returns:
             torch.Tensor: Smoothed warp field with restrictions respected
         """
-        if (self.restrict_deformation is None or not self.has_partial_restriction or 
-            getattr(self, 'force_legacy_behavior', False)):
+        if (
+            self.restrict_deformation is None
+            or not self.has_partial_restriction
+            or getattr(self, "force_legacy_behavior", False)
+        ):
             # No restrictions, no partial restrictions, or forced legacy behavior - use normal smoothing
             from fireants.losses.cc import separable_filtering
 
@@ -174,13 +179,13 @@ class DeformableMixin:
         for dim_idx in range(self.dims):
             component = warp_field[..., dim_idx : dim_idx + 1]  # [N, H, W, [D], 1]
 
-            if self.restrict_deformation[dim_idx] != 0:
-                # This dimension is unrestricted - apply full spatial smoothing
+            if self.restrict_deformation[dim_idx] == 1:
+                # This dimension is UNRESTRICTED (1 = allowed) - apply full spatial smoothing
                 smoothed = separable_filtering(
                     component.permute(*permute_vtoimg), gaussians
                 ).permute(*permute_imgtov)
             else:
-                # This dimension is restricted - keep it as zero (don't smooth)
+                # This dimension is RESTRICTED (0 = not allowed) - keep it as zero (don't smooth)
                 smoothed = component * 0  # Ensure it stays zero
 
             smoothed_components.append(smoothed)
