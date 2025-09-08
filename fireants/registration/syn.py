@@ -19,7 +19,6 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.optim import SGD, Adam
 from tqdm import tqdm
 
 from fireants.io.image import BatchedImages, FakeBatchedImages
@@ -166,14 +165,25 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 smoothing_grad_sigma=smooth_grad_sigma,
             )
         elif deformation_type == "compositive":
+            # Decide who owns warp smoothing:
+            # - With partial restrictions: disable internal smoothing (isotropic) and enable external
+            #   anisotropic smoothing in SyN to respect restrictions.
+            # - Without restrictions: keep internal smoothing and disable external.
+            if getattr(self, "has_partial_restriction", False):
+                internal_warp_sigma = 0.0
+                external_warp_sigma = smooth_warp_sigma
+            else:
+                internal_warp_sigma = float(smooth_warp_sigma)
+                external_warp_sigma = 0.0
+
             fwd_warp = CompositiveWarp(
                 fixed_images,
                 moving_images,
                 optimizer=optimizer,
                 optimizer_lr=optimizer_lr,
                 optimizer_params=optimizer_params,
-                smoothing_grad_sigma=smooth_grad_sigma,
-                smoothing_warp_sigma=smooth_warp_sigma,
+                smoothing_grad_sigma=smooth_grad_sigma,  # gradient smoothing stays per-iteration
+                smoothing_warp_sigma=internal_warp_sigma,
             )
             rev_warp = CompositiveWarp(
                 fixed_images,
@@ -182,9 +192,10 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 optimizer_lr=optimizer_lr,
                 optimizer_params=optimizer_params,
                 smoothing_grad_sigma=smooth_grad_sigma,
-                smoothing_warp_sigma=smooth_warp_sigma,
+                smoothing_warp_sigma=internal_warp_sigma,
             )
-            smooth_warp_sigma = 0  # this work is delegated to compositive warp
+            # External anisotropic warp smoothing used only when restrictions are active
+            smooth_warp_sigma = external_warp_sigma
         else:
             raise ValueError("Invalid deformation type: {}".format(deformation_type))
         self.fwd_warp = fwd_warp
@@ -309,11 +320,24 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 and self.restrict_deformation is not None
             ):
                 # Use anisotropic smoothing for warp fields
+                warp_gaussian = [
+                    gaussian_1d(s, truncated=2)
+                    for s in (
+                        torch.zeros(self.dims, device=fixed_arrays.device)
+                        + self.smooth_warp_sigma
+                    )
+                ]
                 fwd_warp_field = self.apply_anisotropic_smoothing(
-                    fwd_warp_field, self.smooth_warp_sigma
+                    fwd_warp_field,
+                    warp_gaussian,
+                    self.fwd_warp.permute_vtoimg,
+                    self.fwd_warp.permute_imgtov,
                 )
                 rev_inv_warp_field = self.apply_anisotropic_smoothing(
-                    rev_inv_warp_field, self.smooth_warp_sigma
+                    rev_inv_warp_field,
+                    warp_gaussian,
+                    self.rev_warp.permute_vtoimg,
+                    self.rev_warp.permute_imgtov,
                 )
             else:
                 # Use standard isotropic smoothing
@@ -470,9 +494,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                         self.rev_warp.permute_imgtov,
                     )
 
-                # Final enforcement: ensure restricted dimensions remain zero
-                fwd_warp_field = self.apply_warp_field_restriction(fwd_warp_field)
-                rev_warp_field = self.apply_warp_field_restriction(rev_warp_field)
+                # Note: No need for apply_warp_field_restriction here since anisotropic smoothing
+                # already respects restrictions properly without zeroing out components
+
                 # moved and fixed coords
                 moved_coords = (
                     fixed_image_affinecoords + fwd_warp_field
@@ -533,11 +557,24 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                         and self.restrict_deformation is not None
                     ):
                         # Use anisotropic smoothing for warp fields
+                        warp_gaussian = [
+                            gaussian_1d(s, truncated=2)
+                            for s in (
+                                torch.zeros(self.dims, device=fwd_warp_field.device)
+                                + self.smooth_warp_sigma
+                            )
+                        ]
                         fwd_warp_field = self.apply_anisotropic_smoothing(
-                            fwd_warp_field, self.smooth_warp_sigma
+                            fwd_warp_field,
+                            warp_gaussian,
+                            self.fwd_warp.permute_vtoimg,
+                            self.fwd_warp.permute_imgtov,
                         )
                         rev_inv_warp_field = self.apply_anisotropic_smoothing(
-                            rev_inv_warp_field, self.smooth_warp_sigma
+                            rev_inv_warp_field,
+                            warp_gaussian,
+                            self.rev_warp.permute_vtoimg,
+                            self.rev_warp.permute_imgtov,
                         )
                     else:
                         # Use standard isotropic smoothing

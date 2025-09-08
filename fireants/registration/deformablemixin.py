@@ -15,23 +15,13 @@
 
 ## Class to inherit common functions to Greedy and SyN
 
-from typing import Callable, List, Optional, Union
+from typing import List, Union
 
-import numpy as np
 import SimpleITK as sitk
 import torch
-from torch import nn
 from torch.nn import functional as F
-from torch.optim import SGD, Adam
-from tqdm import tqdm
 
 from fireants.io.image import BatchedImages
-from fireants.losses.cc import gaussian_1d, separable_filtering
-from fireants.registration.abstract import AbstractRegistration
-from fireants.registration.deformation.compositive import CompositiveWarp
-from fireants.registration.deformation.svf import StationaryVelocity
-from fireants.utils.globals import MIN_IMG_SIZE
-from fireants.utils.imageutils import downsample
 
 
 class DeformableMixin:
@@ -185,8 +175,8 @@ class DeformableMixin:
                     component.permute(*permute_vtoimg), gaussians
                 ).permute(*permute_imgtov)
             else:
-                # This dimension is RESTRICTED (0 = not allowed) - keep it as zero (don't smooth)
-                smoothed = component * 0  # Ensure it stays zero
+                # This dimension is RESTRICTED (0 = not allowed) - preserve as-is (no smoothing)
+                smoothed = component
 
             smoothed_components.append(smoothed)
 

@@ -20,21 +20,17 @@ author: rohitrango
 from copy import deepcopy
 from functools import partial
 from logging import getLogger
-from typing import Union
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 from fireants.io.image import BatchedImages, Image
-from fireants.losses.cc import gaussian_1d, separable_filtering
+from fireants.losses.cc import gaussian_1d
 from fireants.registration.deformation.abstract import AbstractDeformation
 from fireants.registration.optimizers.adam import WarpAdam
 from fireants.registration.optimizers.sgd import WarpSGD
-from fireants.types import devicetype
 from fireants.utils.globals import MIN_IMG_SIZE
-from fireants.utils.imageutils import _find_integrator_n, jacobian, scaling_and_squaring
-from fireants.utils.util import grad_smoothing_hook
 
 
 class CompositiveWarp(nn.Module, AbstractDeformation):
@@ -134,7 +130,10 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
     def attach_grad_hook(self, restriction_mask=None):
         """attach the grad hook to the warp field if needed"""
         # Remove any existing hooks first
-        if hasattr(self.warp, "_backward_hooks") and self.warp._backward_hooks is not None:
+        if (
+            hasattr(self.warp, "_backward_hooks")
+            and self.warp._backward_hooks is not None
+        ):
             self.warp._backward_hooks.clear()
 
         if self.smoothing_grad_sigma > 0 and self.smoothing_grad_gaussians is not None:

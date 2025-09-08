@@ -105,7 +105,10 @@ class StationaryVelocity(nn.Module, AbstractDeformation):
     def attach_grad_hook(self, restriction_mask=None):
         """attach the grad hook to the velocity field if needed"""
         # Remove any existing hooks first
-        if hasattr(self.velocity_field, "_backward_hooks") and self.velocity_field._backward_hooks is not None:
+        if (
+            hasattr(self.velocity_field, "_backward_hooks")
+            and self.velocity_field._backward_hooks is not None
+        ):
             self.velocity_field._backward_hooks.clear()
 
         if self.smoothing_grad_sigma > 0 and self.smoothing_grad_gaussians is not None:

@@ -16,11 +16,9 @@
 from typing import Callable, List, Optional, Union
 
 import numpy as np
-import SimpleITK as sitk
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.optim import SGD, Adam
 from tqdm import tqdm
 
 from fireants.io.image import BatchedImages, FakeBatchedImages
@@ -160,17 +158,29 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 init_scale=scales[0],
             )
         elif deformation_type == "compositive":
+            # Decide warp smoothing ownership similar to SyN:
+            # - With partial restrictions: disable internal (isotropic) smoothing and perform
+            #   external anisotropic smoothing in this class.
+            # - Without restrictions: keep internal smoothing and disable external.
+            if getattr(self, "has_partial_restriction", False):
+                internal_warp_sigma = 0.0
+                external_warp_sigma = float(smooth_warp_sigma)
+            else:
+                internal_warp_sigma = float(smooth_warp_sigma)
+                external_warp_sigma = 0.0
+
             warp = CompositiveWarp(
                 fixed_images,
                 moving_images,
                 optimizer=optimizer,
                 optimizer_lr=optimizer_lr,
                 optimizer_params=optimizer_params,
-                smoothing_grad_sigma=smooth_grad_sigma,
-                smoothing_warp_sigma=smooth_warp_sigma,
+                smoothing_grad_sigma=smooth_grad_sigma,  # gradient smoothing stays per-iteration
+                smoothing_warp_sigma=internal_warp_sigma,
                 init_scale=scales[0],
             )
-            smooth_warp_sigma = 0  # this work is delegated to compositive warp
+            # External anisotropic warp smoothing used only when restrictions are active
+            smooth_warp_sigma = external_warp_sigma
         else:
             raise ValueError("Invalid deformation type: {}".format(deformation_type))
         self.warp = warp
@@ -336,7 +346,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 align_corners=True,
             ).permute(*self.warp.permute_imgtov)
 
-        # smooth out the warp field if asked to
+        # Smooth warp field if requested (anisotropic when partial restrictions are active)
         if self.smooth_warp_sigma > 0:
             warp_gaussian = [
                 gaussian_1d(s, truncated=2)
@@ -345,9 +355,12 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                     + self.smooth_warp_sigma
                 )
             ]
-            warp_field = separable_filtering(
-                warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian
-            ).permute(*self.warp.permute_imgtov)
+            warp_field = self.apply_anisotropic_smoothing(
+                warp_field,
+                warp_gaussian,
+                self.warp.permute_vtoimg,
+                self.warp.permute_imgtov,
+            )
         # move these coordinates, and return them
         moved_coords = (
             fixed_image_affinecoords + warp_field
@@ -440,7 +453,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             for i in pbar:
                 self.warp.set_zero_grad()
                 warp_field = self.warp.get_warp()  # [N, HWD, 3]
-                # Apply smoothing - will be anisotropic if partial restrictions are active
+                # Apply smoothing - anisotropic when partial restrictions are active
                 if self.smooth_warp_sigma > 0:
                     warp_field = self.apply_anisotropic_smoothing(
                         warp_field,
@@ -448,9 +461,6 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                         self.warp.permute_vtoimg,
                         self.warp.permute_imgtov,
                     )
-
-                # Final enforcement: ensure restricted dimensions remain zero
-                warp_field = self.apply_warp_field_restriction(warp_field)
                 moved_coords = (
                     fixed_image_affinecoords + warp_field
                 )  # affine transform + warp field
