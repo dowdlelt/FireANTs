@@ -23,8 +23,10 @@ import numpy as np
 import torch
 
 # You can modify these paths to point to your test data
-TEST_DATA_DIR = "/tmp/fireants_test_data"  # User will provide actual paths
-RESULTS_DIR = "/tmp/fireants_test_results"
+TEST_DATA_DIR = "/media/logan/NVMe_Storage/Data/nii_data/MassedEvents9pt4T/derivatives/"  # User will provide actual paths
+RESULTS_DIR = (
+    "/media/logan/NVMe_Storage/Data/nii_data/MassedEvents9pt4T/derivatives/results"
+)
 
 # Create results directory
 os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -88,6 +90,9 @@ def test_restricted_deformation_comparison():
     if torch.backends.mps.is_available():
         device = "mps"
         print(f"Using device: {device} (Apple Silicon GPU)")
+    elif torch.cuda.is_available():
+        device = "cuda"
+        print(f"Using device: {device} (CUDA GPU)")
     else:
         device = "cpu"
         print(f"Using device: {device} (CPU fallback)")
@@ -124,7 +129,7 @@ def test_restricted_deformation_comparison():
     # Setup test parameters
     scales = [2, 1]  # Small scale for quick testing
     iterations = [10, 10]  # Few iterations for speed
-    restrict_deformation = [1, 1, 0]  # Allow X,Y motion, restrict Z
+    restrict_deformation = [0, 1, 0]  # Allow Y motion, restrict X, Z
 
     print(f"\nTest parameters:")
     print(f"  Scales: {scales}")
