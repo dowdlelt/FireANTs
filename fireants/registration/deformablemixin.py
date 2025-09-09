@@ -101,12 +101,20 @@ class DeformableMixin:
             # Full reverse deformation (phi_rev = v + id)
             rev_full = rev_warp_field + init_grid
             # Cached inverse of reverse warp to avoid recomputation
-            if cache_inverse and getattr(reg, '_cached_rev_inv_warp', None) is not None:
-                rev_inv_warp_field = reg._cached_rev_inv_warp
+            if hasattr(reg, '_invert_compositive_iterative') and getattr(reg, 'inverse_method', 'iterative') == 'iterative':
+                if cache_inverse and getattr(reg, '_cached_rev_inv_warp', None) is not None:
+                    rev_inv_warp_field = reg._cached_rev_inv_warp
+                else:
+                    rev_inv_warp_field = reg._invert_compositive_iterative(rev_full, init_grid, iters=getattr(reg, 'inverse_iters', 20))
+                    if cache_inverse:
+                        reg._cached_rev_inv_warp = rev_inv_warp_field.detach()
             else:
-                rev_inv_warp_field = compositive_warp_inverse(fixed_image, rev_full, displacement=True)
-                if cache_inverse:
-                    reg._cached_rev_inv_warp = rev_inv_warp_field.detach()
+                if cache_inverse and getattr(reg, '_cached_rev_inv_warp', None) is not None:
+                    rev_inv_warp_field = reg._cached_rev_inv_warp
+                else:
+                    rev_inv_warp_field = compositive_warp_inverse(fixed_image, rev_full, displacement=True)
+                    if cache_inverse:
+                        reg._cached_rev_inv_warp = rev_inv_warp_field.detach()
             # Optional smoothing if configured at higher level (SyN sets smooth_warp_sigma=0 inside compositive warp usually)
             if getattr(reg, 'smooth_warp_sigma', 0) > 0:
                 warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(reg.dims, device=fixed_arrays.device) + reg.smooth_warp_sigma)]

@@ -28,7 +28,7 @@ from fireants.registration.deformation.svf import StationaryVelocity
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
 from fireants.utils.util import compose_warp
-from fireants.utils.warputils import compositive_warp_inverse
+from fireants.utils.warputils import compositive_warp_inverse  # retained for optional use, not default
 
 from fireants.registration.deformablemixin import DeformableMixin
 
@@ -129,6 +129,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         self.fwd_warp = fwd_warp
         self.rev_warp = rev_warp
         self.smooth_warp_sigma = smooth_warp_sigma   # in voxels
+    # iterative inverse config
+    self.inverse_iters = kwargs.get('inverse_iters', 20)
+    self.inverse_method = kwargs.get('inverse_method', 'iterative')  # 'iterative' | 'registration'
         # initialize affine
         if init_affine is None:
             init_affine = torch.eye(self.dims+1, device=fixed_images.device).unsqueeze(0).repeat(fixed_images.size(), 1, 1)  # [N, D+1, D+1]
@@ -199,7 +202,12 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 align_corners=True,
             ).permute(*self.rev_warp.permute_imgtov)
 
-        rev_inv_warp_field = compositive_warp_inverse(fixed_images, rev_warp_field + fixed_image_vgrid, displacement=True)
+        # Invert reverse warp without launching a new registration unless requested
+        if self.inverse_method == 'registration':
+            rev_inv_warp_field = compositive_warp_inverse(fixed_images, rev_warp_field + fixed_image_vgrid, displacement=True)
+        else:
+            rev_full = rev_warp_field  # displacement part
+            rev_inv_warp_field = self._invert_compositive_iterative(rev_full, fixed_image_vgrid, iters=self.inverse_iters)
 
 
 
@@ -216,6 +224,30 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                             fixed_images.shape, align_corners=True)
             moved_coords_final = moved_coords_final - init_grid
         return moved_coords_final
+
+    def _invert_compositive_iterative(self, disp_field: torch.Tensor, base_grid: torch.Tensor, iters: int = 20):
+        """Fast fixed-point iterative inversion of a compositive displacement field.
+
+        Given phi(y) = y + v(y), we find u such that phi^{-1}(x) = x + u(x).
+        Iteration: u_{k+1}(x) = u_k(x) - v(x + u_k(x)).
+        disp_field: displacement v(y) (no identity added)
+        base_grid: identity grid corresponding to disp_field shape
+        Returns displacement inverse u(x).
+        """
+        if self.dims == 3:
+            permute_vtoimg = (0, 4, 1, 2, 3)
+            permute_imgtov = (0, 2, 3, 4, 1)
+            mode = 'trilinear'
+        else:
+            permute_vtoimg = (0, 3, 1, 2)
+            permute_imgtov = (0, 2, 3, 1)
+            mode = 'bilinear'
+        inv = -disp_field.detach()  # initial guess
+        v_img = disp_field.permute(*permute_vtoimg)
+        for _ in range(iters):
+            sampled = F.grid_sample(v_img, base_grid + inv, mode=mode, align_corners=True).permute(*permute_imgtov)
+            inv = inv - sampled
+        return inv
 
     def get_inverse_warped_coordinates(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
         raise NotImplementedError('Inverse warp not implemented for SyN registration')
