@@ -98,6 +98,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 custom_loss: nn.Module = None,
                 restrict_deformations=None,
                 **kwargs) -> None:
+        # Backward-compatible alias: allow 'restrict_deformation'
+        if 'restrict_deformation' in kwargs and restrict_deformations is None:
+            restrict_deformations = kwargs.pop('restrict_deformation')
         # initialize abstract registration
         # nn.Module.__init__(self)
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, reduction=reduction,
