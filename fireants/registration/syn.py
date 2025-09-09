@@ -236,7 +236,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         if self.dims == 3:
             permute_vtoimg = (0, 4, 1, 2, 3)
             permute_imgtov = (0, 2, 3, 4, 1)
-            mode = 'trilinear'
+            mode = 'bilinear'  # grid_sample uses 'bilinear' for 3D tensors
         else:
             permute_vtoimg = (0, 3, 1, 2)
             permute_imgtov = (0, 2, 3, 1)
