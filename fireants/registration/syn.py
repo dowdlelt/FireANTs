@@ -101,6 +101,8 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         # Backward-compatible alias: allow 'restrict_deformation'
         if 'restrict_deformation' in kwargs and restrict_deformations is None:
             restrict_deformations = kwargs.pop('restrict_deformation')
+        # Remove restrict_deformation from kwargs if it exists to avoid passing to parent
+        kwargs.pop('restrict_deformation', None)
         # initialize abstract registration
         # nn.Module.__init__(self)
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, reduction=reduction,
@@ -132,9 +134,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         self.fwd_warp = fwd_warp
         self.rev_warp = rev_warp
         self.smooth_warp_sigma = smooth_warp_sigma   # in voxels
-    # iterative inverse config
-    self.inverse_iters = kwargs.get('inverse_iters', 20)
-    self.inverse_method = kwargs.get('inverse_method', 'iterative')  # 'iterative' | 'registration'
+        # iterative inverse config
+        self.inverse_iters = kwargs.get('inverse_iters', 20)
+        self.inverse_method = kwargs.get('inverse_method', 'iterative')  # 'iterative' | 'registration'
         # initialize affine
         if init_affine is None:
             init_affine = torch.eye(self.dims+1, device=fixed_images.device).unsqueeze(0).repeat(fixed_images.size(), 1, 1)  # [N, D+1, D+1]
