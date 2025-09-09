@@ -99,18 +99,14 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 custom_loss: nn.Module = None,
                 restrict_deformations=None,
                 **kwargs) -> None:
-        # Backward-compatible alias: allow 'restrict_deformation'
-        if 'restrict_deformation' in kwargs and restrict_deformations is None:
-            restrict_deformations = kwargs.pop('restrict_deformation')
-        # Remove restrict_deformation from kwargs if it exists to avoid passing to parent
-        kwargs.pop('restrict_deformation', None)
         # initialize abstract registration
         # nn.Module.__init__(self)
         super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images, 
                          loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss, 
                          loss_params=loss_params,
                          cc_kernel_size=cc_kernel_size, reduction=reduction,
-                         tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, **kwargs)
+                         tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, 
+                         restrict_deformations=restrict_deformations, **kwargs)
         self.dims = fixed_images.dims
         self.blur = blur
         self.reduction = reduction
@@ -126,7 +122,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, \
                                    optimizer_params=optimizer_params, \
                                    smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, \
-                                   init_scale=scales[0], restrict_deformations=restrict_deformations)
+                                   init_scale=scales[0], restrict_deformations=self.restrict_deformations)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
             raise ValueError('Invalid deformation type: {}'.format(deformation_type))
