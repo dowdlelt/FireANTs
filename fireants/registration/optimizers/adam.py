@@ -31,6 +31,7 @@ class WarpAdam:
                  smoothing_gaussians=None, 
                  grad_gaussians=None,
                  freeform=False,
+                 restrict_deformations=None,
     ):
         # init
         if beta1 < 0.0 or beta1 >= 1.0:
@@ -66,6 +67,15 @@ class WarpAdam:
         # gaussian smoothing parameters (if any)
         self.smoothing_gaussians = smoothing_gaussians
         self.grad_gaussians = grad_gaussians
+        # restriction mask (1 means allow deformation, 0 means restrict / zero)
+        self.restrict_mask = None
+        if restrict_deformations is not None:
+            if len(restrict_deformations) != self.n_dims:
+                raise ValueError(f"restrict_deformations length {len(restrict_deformations)} does not match number of dims {self.n_dims}")
+            mask_tensor = torch.as_tensor(restrict_deformations, dtype=warp.dtype, device=warp.device)
+            if not torch.all((mask_tensor == 0) | (mask_tensor == 1)):
+                raise ValueError("restrict_deformations must be a list/iterable of 0/1 values")
+            self.restrict_mask = mask_tensor  # shape [dims]
     
     def set_data_and_size(self, warp, size, grid_copy=None):
         ''' change the optimization variables sizes '''
@@ -102,6 +112,9 @@ class WarpAdam:
     def step(self):
         ''' check for momentum, and other things '''
         grad = torch.clone(self.warp.grad.data).detach()
+        # apply restriction to gradient early so restricted dims never accumulate moments
+        if self.restrict_mask is not None:
+            grad = grad * self.restrict_mask.view(*([1] * (grad.dim() - 1)), -1)
         if self.multiply_jacobian:
             grad = self.augment_jacobian(grad)
         # add weight decay term
@@ -139,4 +152,7 @@ class WarpAdam:
         # smooth result if asked for
         if self.smoothing_gaussians is not None:
             w = separable_filtering(w.permute(*self.permute_vtoimg), self.smoothing_gaussians).permute(*self.permute_imgtov)
+        # enforce restriction after update (keeps channels hard-zeroed)
+        if self.restrict_mask is not None:
+            w = w * self.restrict_mask.view(*([1] * (w.dim() - 1)), -1)
         self.warp.data.copy_(w)
