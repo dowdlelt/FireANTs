@@ -50,7 +50,7 @@ class DeformableMixin:
     - get_warped_coordinates(): Method to get transformed coordinates
     """
 
-    def save_as_ants_transforms(reg, filenames: Union[str, List[str]], cache_inverse: bool = True):
+    def save_as_ants_transforms(reg, filenames: Union[str, List[str]]):
         """Save deformation fields in ANTs-compatible format.
 
         Converts the learned deformation fields to displacement fields in physical space
@@ -80,7 +80,7 @@ class DeformableMixin:
         moving_image: BatchedImages = reg.moving_images
 
         
-        # Fallback to generic path (e.g., Greedy / single warp models)
+        # get the moved coordinates and initial grid in pytorch space
         moved_coords = reg.get_warped_coordinates(fixed_image, moving_image)   # [B, H, W, [D], dim]
         init_grid = F.affine_grid(torch.eye(reg.dims, reg.dims+1, device=moved_coords.device)[None], \
                                     fixed_image.shape, align_corners=True)
