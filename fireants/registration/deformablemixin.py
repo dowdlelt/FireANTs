@@ -31,8 +31,7 @@ from fireants.registration.deformation.svf import StationaryVelocity
 from fireants.registration.deformation.compositive import CompositiveWarp
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
-from fireants.utils.util import compose_warp
-from fireants.utils.warputils import compositive_warp_inverse
+
 
 
 class DeformableMixin:
