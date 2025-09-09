@@ -31,6 +31,8 @@ from fireants.registration.deformation.svf import StationaryVelocity
 from fireants.registration.deformation.compositive import CompositiveWarp
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
+from fireants.utils.util import compose_warp
+from fireants.utils.warputils import compositive_warp_inverse
 
 
 class DeformableMixin:
@@ -49,7 +51,7 @@ class DeformableMixin:
     - get_warped_coordinates(): Method to get transformed coordinates
     """
 
-    def save_as_ants_transforms(reg, filenames: Union[str, List[str]]):
+    def save_as_ants_transforms(reg, filenames: Union[str, List[str]], cache_inverse: bool = True):
         """Save deformation fields in ANTs-compatible format.
 
         Converts the learned deformation fields to displacement fields in physical space
@@ -78,10 +80,46 @@ class DeformableMixin:
         fixed_image: BatchedImages = reg.fixed_images
         moving_image: BatchedImages = reg.moving_images
 
-        # get the moved coordinates and initial grid in pytorch space
-        moved_coords = reg.get_warped_coordinates(fixed_image, moving_image)   # [B, H, W, [D], dim]
-        init_grid = F.affine_grid(torch.eye(reg.dims, reg.dims+1, device=moved_coords.device)[None], \
-                                    fixed_image.shape, align_corners=True)
+        # Determine if this is a symmetric (SyN-like) registration needing composition of forward and inverse warps.
+        if hasattr(reg, 'fwd_warp') and hasattr(reg, 'rev_warp'):
+            # Build affine components (similar logic to Greedy/SyN)
+            fixed_arrays = fixed_image()
+            fixed_t2p = fixed_image.get_torch2phy()
+            moving_p2t = moving_image.get_phy2torch()
+            affine_map_init = torch.matmul(moving_p2t, torch.matmul(reg.affine, fixed_t2p))[:, :-1]
+            fixed_image_affinecoords = F.affine_grid(affine_map_init, fixed_image.shape, align_corners=True)
+            # Identity grid in normalized space
+            init_grid = F.affine_grid(torch.eye(reg.dims, reg.dims+1, device=fixed_arrays.device)[None], \
+                                      fixed_image.shape, align_corners=True)
+            # Current forward / reverse warps
+            fwd_warp_field = reg.fwd_warp.get_warp().detach()
+            rev_warp_field = reg.rev_warp.get_warp().detach()
+            if fwd_warp_field.shape[1:-1] != init_grid.shape[1:-1]:
+                fwd_warp_field = F.interpolate(fwd_warp_field.permute(0, reg.dims+1, *range(1, reg.dims+1)), size=init_grid.shape[1:-1], mode='trilinear' if reg.dims==3 else 'bilinear', align_corners=True).permute(0, *range(2, reg.dims+2), 1)
+            if rev_warp_field.shape[1:-1] != init_grid.shape[1:-1]:
+                rev_warp_field = F.interpolate(rev_warp_field.permute(0, reg.dims+1, *range(1, reg.dims+1)), size=init_grid.shape[1:-1], mode='trilinear' if reg.dims==3 else 'bilinear', align_corners=True).permute(0, *range(2, reg.dims+2), 1)
+            # Full reverse deformation (phi_rev = v + id)
+            rev_full = rev_warp_field + init_grid
+            # Cached inverse of reverse warp to avoid recomputation
+            if cache_inverse and getattr(reg, '_cached_rev_inv_warp', None) is not None:
+                rev_inv_warp_field = reg._cached_rev_inv_warp
+            else:
+                rev_inv_warp_field = compositive_warp_inverse(fixed_image, rev_full, displacement=True)
+                if cache_inverse:
+                    reg._cached_rev_inv_warp = rev_inv_warp_field.detach()
+            # Optional smoothing if configured at higher level (SyN sets smooth_warp_sigma=0 inside compositive warp usually)
+            if getattr(reg, 'smooth_warp_sigma', 0) > 0:
+                warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(reg.dims, device=fixed_arrays.device) + reg.smooth_warp_sigma)]
+                fwd_warp_field = separable_filtering(fwd_warp_field.permute(0, reg.dims+1, *range(1, reg.dims+1)), warp_gaussian).permute(0, *range(2, reg.dims+2), 1)
+                rev_inv_warp_field = separable_filtering(rev_inv_warp_field.permute(0, reg.dims+1, *range(1, reg.dims+1)), warp_gaussian).permute(0, *range(2, reg.dims+2), 1)
+            # Compose (forward ◦ inverse(reverse)) in displacement form relative to init_grid
+            composed_warp = compose_warp(fwd_warp_field, rev_inv_warp_field, init_grid)
+            moved_coords = fixed_image_affinecoords + composed_warp
+        else:
+            # Fallback to generic path (e.g., Greedy / single warp models)
+            moved_coords = reg.get_warped_coordinates(fixed_image, moving_image)   # [B, H, W, [D], dim]
+            init_grid = F.affine_grid(torch.eye(reg.dims, reg.dims+1, device=moved_coords.device)[None], \
+                                        fixed_image.shape, align_corners=True)
         # this is now moved displacements
         moving_t2p = moving_image.get_torch2phy()
         fixed_t2p = fixed_image.get_torch2phy()
