@@ -90,18 +90,15 @@ class AbstractRegistration(ABC):
                 reduction: str = 'mean',
                 tolerance: float = 1e-6, max_tolerance_iters: int = 10, 
                 progress_bar: bool = True,
-                restrict_deformations=None,
-                restrict_deformation=None,  # Alias for backward compatibility
+                restrict_deformation=None,
                 **kwargs
                 ) -> None:
         '''
         Initialize abstract registration class
         '''
         super().__init__()
-        # Handle restrict_deformations alias
-        if restrict_deformation is not None and restrict_deformations is None:
-            restrict_deformations = restrict_deformation
-        self.restrict_deformations = restrict_deformations
+        # Store restrict_deformation parameter
+        self.restrict_deformation = restrict_deformation
         
         self.scales = scales
         _assert_check_scales_decreasing(self.scales)

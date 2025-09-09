@@ -30,7 +30,7 @@ class WarpSGD:
     def __init__(self, warp, lr, 
                  momentum=0, dampening=0, weight_decay=0, nesterov=False, scaledown=False, multiply_jacobian=False,
                  smoothing_gaussians=None, grad_gaussians=None,
-                 restrict_deformations=None):
+                 restrict_deformation=None):
         # init
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
@@ -65,12 +65,12 @@ class WarpSGD:
         self.grad_gaussians = grad_gaussians
         # restriction mask (1 means allow deformation, 0 means restrict)
         self.restrict_mask = None
-        if restrict_deformations is not None:
-            if len(restrict_deformations) != self.n_dims:
-                raise ValueError(f"restrict_deformations length {len(restrict_deformations)} does not match number of dims {self.n_dims}")
-            mask_tensor = torch.as_tensor(restrict_deformations, dtype=warp.dtype, device=warp.device)
+        if restrict_deformation is not None:
+            if len(restrict_deformation) != self.n_dims:
+                raise ValueError(f"restrict_deformation length {len(restrict_deformation)} does not match number of dims {self.n_dims}")
+            mask_tensor = torch.as_tensor(restrict_deformation, dtype=warp.dtype, device=warp.device)
             if not torch.all((mask_tensor == 0) | (mask_tensor == 1)):
-                raise ValueError("restrict_deformations must be a list/iterable of 0/1 values")
+                raise ValueError("restrict_deformation must be a list/iterable of 0/1 values")
             self.restrict_mask = mask_tensor
 
     def set_data_and_size(self, warp, size, grid_copy=None):

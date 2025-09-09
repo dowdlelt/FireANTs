@@ -97,7 +97,6 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 displacement_reg: Optional[Union[Callable, nn.Module]] = None,
                 blur: bool = True,
                 custom_loss: nn.Module = None,
-                restrict_deformations=None,
                 **kwargs) -> None:
         # initialize abstract registration
         # nn.Module.__init__(self)
@@ -105,9 +104,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                          loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss, 
                          loss_params=loss_params,
                          cc_kernel_size=cc_kernel_size, reduction=reduction,
-                         tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, 
-                         restrict_deformations=restrict_deformations,
-                         restrict_deformation=kwargs.pop('restrict_deformation', None), **kwargs)
+                         tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, **kwargs)
         self.dims = fixed_images.dims
         self.blur = blur
         self.reduction = reduction
@@ -123,7 +120,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, \
                                    optimizer_params=optimizer_params, \
                                    smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, \
-                                   init_scale=scales[0], restrict_deformations=self.restrict_deformations)
+                                   init_scale=scales[0], restrict_deformation=self.restrict_deformation)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
             raise ValueError('Invalid deformation type: {}'.format(deformation_type))
