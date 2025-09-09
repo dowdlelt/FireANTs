@@ -45,6 +45,7 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
                 init_scale: int = 1, 
                 smoothing_grad_sigma: float = 0.5, smoothing_warp_sigma: float = 0.5, 
                 freeform: bool = False,
+                restrict_deformations=None,
                 ) -> None:
         super().__init__()
         self.num_images = num_images = max(fixed_images.size(), moving_images.size())
@@ -83,6 +84,9 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
 
         if oparams.get('freeform') is None:
             oparams['freeform'] = freeform
+        # propagate restrict_deformations to optimizer
+        if oparams.get('restrict_deformations') is None and restrict_deformations is not None:
+            oparams['restrict_deformations'] = restrict_deformations
         # add optimizer
         optimizer = optimizer.lower()
         if optimizer == 'sgd':
