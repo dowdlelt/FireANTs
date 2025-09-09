@@ -106,7 +106,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                          loss_params=loss_params,
                          cc_kernel_size=cc_kernel_size, reduction=reduction,
                          tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, 
-                         restrict_deformations=restrict_deformations, **kwargs)
+                         restrict_deformations=restrict_deformations,
+                         restrict_deformation=kwargs.pop('restrict_deformation', None), **kwargs)
         self.dims = fixed_images.dims
         self.blur = blur
         self.reduction = reduction

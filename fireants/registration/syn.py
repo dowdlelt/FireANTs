@@ -104,7 +104,8 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                          loss_params=loss_params,
                          loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss, cc_kernel_size=cc_kernel_size,
                          tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, 
-                         restrict_deformations=restrict_deformations, **kwargs)
+                         restrict_deformations=restrict_deformations, 
+                         restrict_deformation=kwargs.pop('restrict_deformation', None), **kwargs)
         self.dims = fixed_images.dims
         self.blur = blur
         self.reduction = reduction
