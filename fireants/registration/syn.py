@@ -79,6 +79,10 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         rev_warp: Reverse deformation model (StationaryVelocity or CompositiveWarp)
         affine (torch.Tensor): Initial affine transformation matrix
         smooth_warp_sigma (float): Smoothing sigma for warp field
+
+    Note:
+        The inverse of rev_warp is cached after first computation to avoid redundant
+        Greedy optimization runs when getting warp parameters multiple times.
     """
     def __init__(self, scales: List[int], iterations: List[float],
                 fixed_images: BatchedImages, moving_images: BatchedImages,
@@ -134,6 +138,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         self.fwd_warp = fwd_warp
         self.rev_warp = rev_warp
         self.smooth_warp_sigma = smooth_warp_sigma   # in voxels
+        # cache for inverse warp to avoid recomputation
+        self._cached_rev_inv_warp = None
+        self._cached_rev_inv_warp_shape = None
         # initialize affine
         if init_affine is None:
             init_affine = torch.eye(self.dims+1, device=fixed_images.device).unsqueeze(0).repeat(fixed_images.size(), 1, 1)  # [N, D+1, D+1]
@@ -196,11 +203,19 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             ).permute(*self.fwd_warp.permute_imgtov)
 
         # compute inverse of rev_warp with the size of `fixed_images`
-        # Pass restrict_deformation if it exists (from fwd_warp which has it stored)
-        restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
-        rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(),
-                                                      displacement=True,
-                                                      restrict_deformation=restrict_deform)
+        # Use cached version if available and shape matches
+        if self._cached_rev_inv_warp is not None and self._cached_rev_inv_warp_shape == tuple(shape[2:]):
+            rev_inv_warp_field = self._cached_rev_inv_warp
+        else:
+            # Pass restrict_deformation if it exists (from fwd_warp which has it stored)
+            restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
+            rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(),
+                                                          displacement=True,
+                                                          restrict_deformation=restrict_deform,
+                                                          progress_bar=False)  # Disable progress bar for cleaner output
+            # Cache the result
+            self._cached_rev_inv_warp = rev_inv_warp_field.detach().clone()
+            self._cached_rev_inv_warp_shape = tuple(shape[2:])
         if tuple(rev_inv_warp_field.shape[1:-1]) != tuple(shape[2:]):
             rev_inv_warp_field = F.interpolate(
                 self.rev_warp.get_warp().permute(*self.rev_warp.permute_vtoimg),
@@ -231,6 +246,15 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
 
     def get_inverse_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
         raise NotImplementedError('Inverse warp not implemented for SyN registration')
+
+    def clear_inverse_cache(self):
+        """Clear the cached inverse warp field.
+
+        This is useful if the rev_warp has been modified after the cache was created,
+        though typically this shouldn't happen after optimization is complete.
+        """
+        self._cached_rev_inv_warp = None
+        self._cached_rev_inv_warp_shape = None
 
     def optimize(self):
         """Optimize the symmetric deformation parameters.
