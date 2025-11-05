@@ -141,6 +141,8 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         # cache for inverse warp to avoid recomputation
         self._cached_rev_inv_warp = None
         self._cached_rev_inv_warp_shape = None
+        self._cached_fwd_inv_warp = None
+        self._cached_fwd_inv_warp_shape = None
         # initialize affine
         if init_affine is None:
             init_affine = torch.eye(self.dims+1, device=fixed_images.device).unsqueeze(0).repeat(fixed_images.size(), 1, 1)  # [N, D+1, D+1]
@@ -247,16 +249,98 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         }
 
     def get_inverse_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
-        raise NotImplementedError('Inverse warp not implemented for SyN registration')
+        """Get the inverse warp parameters (moving → fixed).
+
+        For SyN, the inverse is: rev_warp + inverse(fwd_warp)
+        This is the reverse of the forward transformation.
+
+        Args:
+            fixed_images: Fixed images
+            moving_images: Moving images
+            shape: Optional output shape
+
+        Returns:
+            dict: Dictionary with 'affine' and 'grid' keys containing the inverse transformation
+        """
+        fixed_arrays = fixed_images()
+
+        if shape is None:
+            shape = fixed_images.shape
+        else:
+            shape = [fixed_arrays.shape[0], 1] + list(shape)
+
+        fixed_t2p = fixed_images.get_torch2phy().to(self.dtype)
+        moving_p2t = moving_images.get_phy2torch().to(self.dtype)
+
+        # Inverse affine: moving → fixed (inverse of the forward affine)
+        affine_inv = torch.linalg.inv(self.affine).to(self.dtype)
+        affine_map_inv = (torch.matmul(fixed_t2p, torch.matmul(affine_inv, moving_p2t))[:, :-1]).contiguous().to(self.dtype)
+
+        # Get rev_warp (moving → midpoint)
+        rev_warp_field = self.rev_warp.get_warp()
+        if tuple(rev_warp_field.shape[1:-1]) != tuple(shape[2:]):
+            rev_warp_field = F.interpolate(
+                rev_warp_field.permute(*self.rev_warp.permute_vtoimg),
+                size=shape[2:],
+                mode="trilinear",
+                align_corners=True,
+            ).permute(*self.rev_warp.permute_imgtov)
+
+        # Compute inverse of fwd_warp (midpoint → fixed) with caching
+        restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
+
+        if self._cached_fwd_inv_warp is not None and self._cached_fwd_inv_warp_shape == tuple(shape[2:]):
+            fwd_inv_warp_field = self._cached_fwd_inv_warp
+        else:
+            from fireants.utils.warputils import compositive_warp_inverse
+            fwd_inv_warp_field = compositive_warp_inverse(fixed_images, self.fwd_warp.get_warp(),
+                                                          displacement=True,
+                                                          restrict_deformation=restrict_deform,
+                                                          progress_bar=False)
+            # Cache the result
+            self._cached_fwd_inv_warp = fwd_inv_warp_field.detach().clone()
+            self._cached_fwd_inv_warp_shape = tuple(shape[2:])
+
+        if tuple(fwd_inv_warp_field.shape[1:-1]) != tuple(shape[2:]):
+            fwd_inv_warp_field = F.interpolate(
+                fwd_inv_warp_field.permute(*self.fwd_warp.permute_vtoimg),
+                size=shape[2:],
+                mode="trilinear",
+                align_corners=True,
+            ).permute(*self.fwd_warp.permute_imgtov)
+
+        # Smooth if required
+        if self.smooth_warp_sigma > 0:
+            warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
+            rev_warp_field = separable_filtering(rev_warp_field.permute(*self.rev_warp.permute_vtoimg), warp_gaussian).permute(*self.rev_warp.permute_imgtov)
+            fwd_inv_warp_field = separable_filtering(fwd_inv_warp_field.permute(*self.fwd_warp.permute_vtoimg), warp_gaussian).permute(*self.fwd_warp.permute_imgtov)
+
+        # Compose: rev_warp + inverse(fwd_warp) gives moving → fixed
+        composed_inv_warp = compose_warp(rev_warp_field, fwd_inv_warp_field)
+
+        # Apply final restriction to ensure restricted dimensions are exactly zero
+        if restrict_deform is not None:
+            with torch.no_grad():
+                for dim_idx, factor in enumerate(restrict_deform):
+                    if factor == 0.0:
+                        composed_inv_warp[..., dim_idx] = 0.0
+
+        return {
+            'affine': affine_map_inv,
+            'grid': composed_inv_warp,
+        }
 
     def clear_inverse_cache(self):
-        """Clear the cached inverse warp field.
+        """Clear all cached inverse warp fields.
 
-        This is useful if the rev_warp has been modified after the cache was created,
-        though typically this shouldn't happen after optimization is complete.
+        This clears both forward and reverse inverse caches. Useful if the warps
+        have been modified after the caches were created, though typically this
+        shouldn't happen after optimization is complete.
         """
         self._cached_rev_inv_warp = None
         self._cached_rev_inv_warp_shape = None
+        self._cached_fwd_inv_warp = None
+        self._cached_fwd_inv_warp_shape = None
 
     def optimize(self):
         """Optimize the symmetric deformation parameters.

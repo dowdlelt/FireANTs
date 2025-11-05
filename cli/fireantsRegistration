@@ -628,11 +628,23 @@ def main():
     # save transform
     if transform_type in ['Rigid', 'Affine']:
         transform_file = f"{output_prefix}0GenericAffine.txt"
+        Path(transform_file).parent.mkdir(parents=True, exist_ok=True)
+        reg.save_as_ants_transforms(str(transform_file))
+        logger.info(f"Saved transform to {transform_file}")
     else:
+        # Save forward warp
         transform_file = f"{output_prefix}0Warp.nii.gz"
-    Path(transform_file).parent.mkdir(parents=True, exist_ok=True)
-    reg.save_as_ants_transforms(str(transform_file))
-    logger.info(f"Saved transform to {transform_file}")
+        Path(transform_file).parent.mkdir(parents=True, exist_ok=True)
+        reg.save_as_ants_transforms(str(transform_file), save_inverse=False)
+        logger.info(f"Saved forward transform to {transform_file}")
+
+        # Save inverse warp
+        inv_transform_file = f"{output_prefix}0InverseWarp.nii.gz"
+        try:
+            reg.save_as_ants_transforms(str(inv_transform_file), save_inverse=True)
+            logger.info(f"Saved inverse transform to {inv_transform_file}")
+        except NotImplementedError:
+            logger.warning(f"Inverse transform not available for {transform_type} registration")
 
 
 if __name__ == '__main__':
