@@ -203,12 +203,14 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             ).permute(*self.fwd_warp.permute_imgtov)
 
         # compute inverse of rev_warp with the size of `fixed_images`
+        # Get restrict_deformation if it exists (needed for both cache hit and miss)
+        restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
+
         # Use cached version if available and shape matches
         if self._cached_rev_inv_warp is not None and self._cached_rev_inv_warp_shape == tuple(shape[2:]):
             rev_inv_warp_field = self._cached_rev_inv_warp
         else:
-            # Pass restrict_deformation if it exists (from fwd_warp which has it stored)
-            restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
+            # Compute inverse with restriction
             rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(),
                                                           displacement=True,
                                                           restrict_deformation=restrict_deform,
