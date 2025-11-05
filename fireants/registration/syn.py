@@ -59,6 +59,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         cc_kernel_type (str, optional): Kernel type for CC loss. Defaults to 'rectangular'.
         smooth_warp_sigma (float, optional): Gaussian smoothing sigma for warp field. Defaults to 0.25.
         smooth_grad_sigma (float, optional): Gaussian smoothing sigma for gradient field. Defaults to 1.0.
+        restrict_deformation (Optional[List[float]], optional): Scaling factors to restrict deformation along
+            each spatial dimension. For example, [0, 1, 0] only allows deformation in y-direction,
+            [0.1, 0.6, 0.1] scales deformations differently per axis. Defaults to None (no restriction).
         reduction (str, optional): Loss reduction method - 'mean' or 'sum'. Defaults to 'sum'.
         cc_kernel_size (float, optional): Kernel size for CC loss. Defaults to 3.
         loss_params (dict, optional): Additional parameters for loss function. Defaults to {}.
@@ -77,16 +80,17 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         affine (torch.Tensor): Initial affine transformation matrix
         smooth_warp_sigma (float): Smoothing sigma for warp field
     """
-    def __init__(self, scales: List[int], iterations: List[float], 
+    def __init__(self, scales: List[int], iterations: List[float],
                 fixed_images: BatchedImages, moving_images: BatchedImages,
                 loss_type: str = "cc",
                 deformation_type: str = 'compositive',
                 optimizer: str = 'Adam', optimizer_params: dict = {},
-                optimizer_lr: float = 0.1, 
+                optimizer_lr: float = 0.1,
                 integrator_n: Union[str, int] = 10,
                 mi_kernel_type: str = 'gaussian', cc_kernel_type: str = 'rectangular',
                 smooth_warp_sigma: float = 0.5,
                 smooth_grad_sigma: float = 1.0,
+                restrict_deformation: Optional[List[float]] = None,
                 reduction: str = 'mean',
                 cc_kernel_size: float = 7,
                 loss_params: dict = {},
@@ -113,17 +117,17 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         if deformation_type == 'geodesic':
             fwd_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
                                         optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
-                                        smoothing_grad_sigma=smooth_grad_sigma)
+                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation)
             rev_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
                                         optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
-                                        smoothing_grad_sigma=smooth_grad_sigma)
+                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation)
         elif deformation_type == 'compositive':
             fwd_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
                 dtype=self.dtype,
-                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma)
+                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation)
             rev_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
                 dtype=self.dtype,
-                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma)
+                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
             raise ValueError('Invalid deformation type: {}'.format(deformation_type))
@@ -192,7 +196,11 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             ).permute(*self.fwd_warp.permute_imgtov)
 
         # compute inverse of rev_warp with the size of `fixed_images`
-        rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(), displacement=True)
+        # Pass restrict_deformation if it exists (from fwd_warp which has it stored)
+        restrict_deform = getattr(self.fwd_warp, 'restrict_deformation', None)
+        rev_inv_warp_field = compositive_warp_inverse(fixed_images, self.rev_warp.get_warp(),
+                                                      displacement=True,
+                                                      restrict_deformation=restrict_deform)
         if tuple(rev_inv_warp_field.shape[1:-1]) != tuple(shape[2:]):
             rev_inv_warp_field = F.interpolate(
                 self.rev_warp.get_warp().permute(*self.rev_warp.permute_vtoimg),
@@ -208,6 +216,14 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
             rev_inv_warp_field = separable_filtering(rev_inv_warp_field.permute(*self.rev_warp.permute_vtoimg), warp_gaussian).permute(*self.rev_warp.permute_imgtov)
         # # compose the two warp fields
         composed_warp = compose_warp(fwd_warp_field, rev_inv_warp_field)
+
+        # Apply final restriction to composed warp to ensure restricted dimensions are exactly zero
+        if restrict_deform is not None:
+            with torch.no_grad():
+                for dim_idx, factor in enumerate(restrict_deform):
+                    if factor == 0.0:
+                        composed_warp[..., dim_idx] = 0.0
+
         return {
             'affine': affine_map_init,
             'grid': composed_warp,

@@ -151,7 +151,7 @@ def _assert_check_scales_decreasing(scales: List[int]):
 
 
 def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
-    ''' this backward hook will smooth out the gradient using the gaussians 
+    ''' this backward hook will smooth out the gradient using the gaussians
     has to be called with a partial function
     '''
     # grad is of shape [B, H, W, D, dims]
@@ -162,6 +162,37 @@ def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
         permute_vtoimg = (0, 3, 1, 2)
         permute_imgtov = (0, 2, 3, 1)
     return separable_filtering(grad.permute(*permute_vtoimg), gaussians).permute(*permute_imgtov)
+
+
+def grad_restriction_hook(grad: torch.Tensor, restrict_factors: List[float]):
+    ''' this backward hook restricts gradients along specific dimensions
+    by multiplying each dimension's gradient by a scaling factor
+
+    Args:
+        grad: gradient tensor of shape [B, H, W, [D], dims]
+              where dims is the number of spatial dimensions (2 or 3)
+        restrict_factors: list of scaling factors for each dimension
+                          e.g., [0, 1, 0] means only allow deformation in y-direction
+                          e.g., [0.1, 0.6, 0.1] means scale deformations differently per axis
+
+    Returns:
+        modified gradient tensor with restricted deformations
+    '''
+    # grad is of shape [B, H, W, D, dims] for 3D or [B, H, W, dims] for 2D
+    # The last dimension contains the vector components (x, y, [z] displacements)
+
+    # Convert restrict_factors to tensor on the same device as grad
+    restrict_tensor = torch.tensor(restrict_factors, dtype=grad.dtype, device=grad.device)
+
+    # Reshape restrict_tensor to broadcast correctly: [1, 1, 1, [1], dims]
+    # This allows element-wise multiplication along the last dimension
+    if len(grad.shape) == 5:  # 3D case: [B, H, W, D, 3]
+        restrict_tensor = restrict_tensor.view(1, 1, 1, 1, -1)
+    elif len(grad.shape) == 4:  # 2D case: [B, H, W, 2]
+        restrict_tensor = restrict_tensor.view(1, 1, 1, -1)
+
+    # Multiply gradients by restriction factors
+    return grad * restrict_tensor
 
 
 def augment_filenames(filenames: List[str], batch_size: int, permitted_ext: List[str]):

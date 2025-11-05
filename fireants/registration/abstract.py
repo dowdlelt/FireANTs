@@ -86,17 +86,18 @@ class AbstractRegistration(ABC):
     """
 
     def __init__(self,
-                scales: List[int], iterations: List[float], 
+                scales: List[int], iterations: List[float],
                 fixed_images: BatchedImages, moving_images: BatchedImages,
                 loss_type: str = "cc",
                 mi_kernel_type: str = 'gaussian', cc_kernel_type: str = 'rectangular',
                 custom_loss: nn.Module = None,
                 loss_params: dict = {},
-                cc_kernel_size: int = 3, 
+                cc_kernel_size: int = 3,
                 reduction: str = 'mean',
-                tolerance: float = 1e-6, max_tolerance_iters: int = 10, 
+                tolerance: float = 1e-6, max_tolerance_iters: int = 10,
                 progress_bar: bool = True,
                 dtype: torch.dtype = torch.float32,
+                **kwargs
                 ) -> None:
         '''
         Initialize abstract registration class

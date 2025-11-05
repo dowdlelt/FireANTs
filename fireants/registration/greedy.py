@@ -94,6 +94,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 cc_kernel_size: int = 7,
                 smooth_warp_sigma: float = 0.5,
                 smooth_grad_sigma: float = 1.0,
+                restrict_deformation: Optional[List[float]] = None,
                 loss_params: dict = {},
                 reduction: str = 'mean',
                 tolerance: float = 1e-6, max_tolerance_iters: int = 10,
@@ -122,11 +123,11 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             logger.warn(f"Use compositive deformation for better performance")
             logger.info(f"Using geodesic deformation with {integrator_n} integration steps")
             warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, dtype=self.dtype,
-                                    smoothing_grad_sigma=smooth_grad_sigma, init_scale=scales[0])
+                                    smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation, init_scale=scales[0])
         elif deformation_type == 'compositive':
             warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
                 dtype=self.dtype,
-                smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, init_scale=scales[0], freeform=freeform)
+                smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation, init_scale=scales[0], freeform=freeform)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
             raise ValueError('Invalid deformation type: {}'.format(deformation_type))
@@ -168,7 +169,11 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             shape = [moving_arrays.shape[0], 1] + list(shape) if use_moving_shape else [fixed_arrays.shape[0], 1] + list(shape)
 
         warp = self.warp.get_warp().detach().clone()
-        warp_inv = compositive_warp_inverse(moving_images if use_moving_shape else fixed_images, warp, displacement=True)
+        # Pass restrict_deformation if it exists
+        restrict_deform = getattr(self.warp, 'restrict_deformation', None)
+        warp_inv = compositive_warp_inverse(moving_images if use_moving_shape else fixed_images, warp,
+                                           displacement=True,
+                                           restrict_deformation=restrict_deform)
         # resample if needed
         mode = "bilinear" if self.dims == 2 else "trilinear"
         if tuple(warp_inv.shape[1:-1]) != tuple(shape[2:]):

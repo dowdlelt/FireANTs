@@ -133,10 +133,11 @@ def shape_averaging_invwarp(
 
 
 def compositive_warp_inverse(image: BatchedImages, ref_disp: torch.Tensor,
-                        scales: List[float] = [8, 4, 2, 1], 
+                        scales: List[float] = [8, 4, 2, 1],
                         iterations: List[int] = [200, 200, 100, 50],
                         smooth_grad_sigma: float = 0.0,
                         smooth_warp_sigma: float = 0.0,
+                        restrict_deformation: Optional[List[float]] = None,
                         displacement: bool = False,
                         progress_bar: bool = True,
                         ):
@@ -147,7 +148,7 @@ def compositive_warp_inverse(image: BatchedImages, ref_disp: torch.Tensor,
     and we want to obtain the inverse warp of this displacement field
     '''
     from fireants.registration.greedy import GreedyRegistration
-    reg = GreedyRegistration( 
+    reg = GreedyRegistration(
         scales=scales,
         iterations=iterations,
         fixed_images=image,
@@ -160,6 +161,7 @@ def compositive_warp_inverse(image: BatchedImages, ref_disp: torch.Tensor,
         dtype=ref_disp.dtype,
         smooth_grad_sigma=smooth_grad_sigma,
         smooth_warp_sigma=smooth_warp_sigma,
+        restrict_deformation=restrict_deformation,
         progress_bar=progress_bar,
     )
     ## initialize disp with negative of initial displacement

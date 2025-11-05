@@ -20,13 +20,13 @@ from functools import partial
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import Union
+from typing import Union, Optional, List
 from fireants.registration.deformation.abstract import AbstractDeformation
 from fireants.io.image import Image, BatchedImages
 from fireants.utils.imageutils import scaling_and_squaring, _find_integrator_n
 from fireants.types import devicetype
 from fireants.losses.cc import gaussian_1d, separable_filtering
-from fireants.utils.util import grad_smoothing_hook
+from fireants.utils.util import grad_smoothing_hook, grad_restriction_hook
 from fireants.utils.imageutils import jacobian
 from fireants.registration.optimizers.sgd import WarpSGD
 from fireants.registration.optimizers.adam import WarpAdam
@@ -42,8 +42,9 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
     '''
     def __init__(self, fixed_images: BatchedImages, moving_images: BatchedImages,
                 optimizer: str = 'Adam', optimizer_lr: float = 1e-2, optimizer_params: dict = {},
-                init_scale: int = 1, 
-                smoothing_grad_sigma: float = 0.5, smoothing_warp_sigma: float = 0.5, 
+                init_scale: int = 1,
+                smoothing_grad_sigma: float = 0.5, smoothing_warp_sigma: float = 0.5,
+                restrict_deformation: Optional[List[float]] = None,
                 freeform: bool = False,
                 dtype: torch.dtype = torch.float32,
                 ) -> None:
@@ -70,6 +71,12 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
         self.smoothing_grad_sigma = smoothing_grad_sigma
         if smoothing_grad_sigma > 0:
             self.smoothing_grad_gaussians = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.n_dims, device=fixed_images.device, dtype=dtype) + smoothing_grad_sigma)]
+
+        # store restriction factors if provided
+        self.restrict_deformation = restrict_deformation
+        if restrict_deformation is not None and len(restrict_deformation) != self.n_dims:
+            raise ValueError(f"restrict_deformation must have {self.n_dims} elements for {self.n_dims}D images, got {len(restrict_deformation)}")
+
         self.attach_grad_hook()
 
         # if the warp is also to be smoothed, add this constraint to the optimizer (in the optimizer_params dict)
@@ -91,10 +98,39 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
             raise NotImplementedError(f'Optimizer {optimizer} not implemented')
     
     def attach_grad_hook(self):
-        ''' attack the grad hook to the velocity field if needed '''
+        ''' attach the grad hook to the velocity field if needed '''
+        hooks = []
+
+        # Add smoothing hook if needed
         if self.smoothing_grad_sigma > 0:
-            hook = partial(grad_smoothing_hook, gaussians=self.smoothing_grad_gaussians)
-            self.warp.register_hook(hook)
+            hook_smooth = partial(grad_smoothing_hook, gaussians=self.smoothing_grad_gaussians)
+            hooks.append(hook_smooth)
+
+        # Add restriction hook if needed
+        if self.restrict_deformation is not None:
+            hook_restrict = partial(grad_restriction_hook, restrict_factors=self.restrict_deformation)
+            hooks.append(hook_restrict)
+
+        # Chain hooks if multiple exist
+        if len(hooks) > 1:
+            def combined_hook(grad):
+                for hook in hooks:
+                    grad = hook(grad)
+                return grad
+            self.warp.register_hook(combined_hook)
+        elif len(hooks) == 1:
+            self.warp.register_hook(hooks[0])
+
+    def apply_warp_restriction(self):
+        ''' Apply restriction to the warp field itself (not just gradients)
+        This ensures restricted dimensions stay exactly at zero even after
+        compositional updates in the optimizer.
+        '''
+        with torch.no_grad():
+            for dim_idx, factor in enumerate(self.restrict_deformation):
+                if factor == 0.0:
+                    # Zero out this dimension completely
+                    self.warp.data[..., dim_idx] = 0.0
     
     def initialize_grid(self):
         ''' initialize grid to a size 
@@ -108,6 +144,9 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
     
     def step(self):
         self.optimizer.step()
+        # Apply restriction to warp field after optimization step
+        if self.restrict_deformation is not None:
+            self.apply_warp_restriction()
 
     def get_warp(self):
         ''' return warp function '''
