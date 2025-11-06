@@ -45,6 +45,7 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
                 init_scale: int = 1,
                 smoothing_grad_sigma: float = 0.5, smoothing_warp_sigma: float = 0.5,
                 restrict_deformation: Optional[List[float]] = None,
+                fix_hook_accumulation: bool = True,
                 freeform: bool = False,
                 dtype: torch.dtype = torch.float32,
                 ) -> None:
@@ -77,6 +78,9 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
         if restrict_deformation is not None and len(restrict_deformation) != self.n_dims:
             raise ValueError(f"restrict_deformation must have {self.n_dims} elements for {self.n_dims}D images, got {len(restrict_deformation)}")
 
+        # store flag for fixing hook accumulation bug
+        self.fix_hook_accumulation = fix_hook_accumulation
+
         self.attach_grad_hook()
 
         # if the warp is also to be smoothed, add this constraint to the optimizer (in the optimizer_params dict)
@@ -99,6 +103,12 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
     
     def attach_grad_hook(self):
         ''' attach the grad hook to the velocity field if needed '''
+        # Clear existing hooks to prevent accumulation across scale transitions
+        # This fixes a bug where hooks accumulate (1x at scale 8, 2x at scale 4, 3x at scale 2, 4x at scale 1)
+        # causing gradients to be overly restricted and preventing proper optimization
+        if self.fix_hook_accumulation and hasattr(self.warp, '_backward_hooks') and self.warp._backward_hooks is not None:
+            self.warp._backward_hooks.clear()
+
         hooks = []
 
         # Add smoothing hook if needed

@@ -62,6 +62,10 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         restrict_deformation (Optional[List[float]], optional): Scaling factors to restrict deformation along
             each spatial dimension. For example, [0, 1, 0] only allows deformation in y-direction,
             [0.1, 0.6, 0.1] scales deformations differently per axis. Defaults to None (no restriction).
+        fix_hook_accumulation (bool, optional): If True, clears gradient hooks before re-registering them
+            during scale transitions. This fixes a bug where hooks accumulate (1x at scale 8, 2x at scale 4,
+            3x at scale 2, 4x at scale 1), causing gradients to be overly restricted. Set to False to reproduce
+            the buggy behavior for comparison. Defaults to True.
         reduction (str, optional): Loss reduction method - 'mean' or 'sum'. Defaults to 'sum'.
         cc_kernel_size (float, optional): Kernel size for CC loss. Defaults to 3.
         loss_params (dict, optional): Additional parameters for loss function. Defaults to {}.
@@ -95,6 +99,7 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 smooth_warp_sigma: float = 0.5,
                 smooth_grad_sigma: float = 1.0,
                 restrict_deformation: Optional[List[float]] = None,
+                fix_hook_accumulation: bool = True,
                 reduction: str = 'mean',
                 cc_kernel_size: float = 7,
                 loss_params: dict = {},
@@ -121,17 +126,21 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         if deformation_type == 'geodesic':
             fwd_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
                                         optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
-                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation)
+                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation,
+                                        fix_hook_accumulation=fix_hook_accumulation)
             rev_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
                                         optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
-                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation)
+                                        smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation,
+                                        fix_hook_accumulation=fix_hook_accumulation)
         elif deformation_type == 'compositive':
             fwd_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
                 dtype=self.dtype,
-                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation)
+                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation,
+                                   fix_hook_accumulation=fix_hook_accumulation)
             rev_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
                 dtype=self.dtype,
-                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation)
+                                   smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation,
+                                   fix_hook_accumulation=fix_hook_accumulation)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
             raise ValueError('Invalid deformation type: {}'.format(deformation_type))

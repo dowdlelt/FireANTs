@@ -78,6 +78,8 @@ def parse_args():
     parser.add_argument('--smooth_warp_sigma', type=float, default=0.25, help='Smoothing sigma for the warp field')
     parser.add_argument('--smooth_grad_sigma', type=float, default=0.5, help='Smoothing sigma for the gradient field')
     parser.add_argument('--restrict-deformation', type=str, default=None, help='Restrict deformations per dimension (e.g., 0x1x0 or .1x.6x.1)')
+    parser.add_argument('--no-fix-hook-accumulation', action='store_true', help='Disable fix for gradient hook accumulation bug (for comparison with buggy behavior)')
+    parser.add_argument('--intensity-weighted-cc', type=float, nargs='?', const=1.0, default=None, metavar='SIGMA', help='Weight CC loss by smoothed intensity (sigma in voxels, default: 1.0 if flag used without value). Computes weights from smoothed midpoint images to emphasize brain tissue over background.')
     parser.add_argument('--normalize-image-intensities', action='store_true', help="Normalize image intensities to [0,1]")
 
     # device args
@@ -160,6 +162,8 @@ def parse_transform(transform_str: str, args: argparse.Namespace) -> Tuple[str, 
         # Parse restrict_deformation from CLI arg
         if args.restrict_deformation is not None:
             pd['restrict_deformation'] = [float(x) for x in args.restrict_deformation.split('x')]
+        # Parse fix_hook_accumulation from CLI flag (default is True, flag disables it)
+        pd['fix_hook_accumulation'] = not args.no_fix_hook_accumulation
         opt_id = 4
     # add other keyword arguments if necessary
     for i in range(opt_id, len(params)):
@@ -519,6 +523,13 @@ def main():
         fixed_path = metric_params['fixed']
         moving_path = metric_params['moving']
         del metric_params['fixed'], metric_params['moving']
+
+        # Add intensity weighting for CC loss if requested
+        if args.intensity_weighted_cc is not None and metric_params.get('loss_type') == 'cc':
+            if 'loss_params' not in metric_params:
+                metric_params['loss_params'] = {}
+            metric_params['loss_params']['intensity_weighting'] = True
+            metric_params['loss_params']['intensity_weight_sigma'] = args.intensity_weighted_cc
 
         # load images
         fixed_image = load_image(fixed_path, device=args.device)

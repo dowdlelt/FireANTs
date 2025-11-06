@@ -216,6 +216,8 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         unsigned: bool = True,
         use_separable_override: bool = True,
         checkpointing: bool = False,
+        intensity_weighting: bool = False,
+        intensity_weight_sigma: float = 1.0,
     ) -> None:
         """
         Args:
@@ -229,6 +231,12 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
                 - ``"sum"``: the output will be summed.
             smooth_nr: a small constant added to the numerator to avoid nan.
             smooth_dr: a small constant added to the denominator to avoid nan.
+            intensity_weighting: if True, weight the CC loss by image intensity. Higher intensity voxels
+                (e.g., brain tissue) contribute more to the loss than lower intensity voxels (e.g., background).
+                Weights are computed from smoothed versions of target and pred. Defaults to False.
+            intensity_weight_sigma: Gaussian smoothing sigma (in voxels) applied to images before computing
+                intensity weights. Only used when intensity_weighting=True. Smoothing reduces noise and allows
+                voxels near edges to contribute. Defaults to 1.0.
             split: do we want to split computation across 2 GPUs? (if pred and target are on different GPUs)
                 default: False (assumes they are on same device and big enough to fit on one GPU)
         """
@@ -253,6 +261,15 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         self.smooth_dr = float(smooth_dr)
         self.checkpointing = checkpointing
         self.use_separable_override = use_separable_override
+        self.intensity_weighting = intensity_weighting
+        self.intensity_weight_sigma = float(intensity_weight_sigma)
+
+        # Pre-compute Gaussian kernels for intensity weight smoothing
+        if self.intensity_weighting and self.intensity_weight_sigma > 0:
+            self.intensity_weight_gaussians = [gaussian_1d(self.intensity_weight_sigma, truncated=2)
+                                               for _ in range(self.ndim)]
+        else:
+            self.intensity_weight_gaussians = None
 
     def get_image_padding(self) -> int:
         return (self.kernel_size - 1) // 2
@@ -352,12 +369,40 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         # clamp (dont really need this because the offending pixels are very sparse)
         ncc = ncc.clamp(min=-1, max=1)
 
+        # Apply intensity-based weighting if enabled
+        if self.intensity_weighting:
+            # Smooth the midpoint images before computing weights
+            # This reduces noise and allows edge voxels to contribute
+            if self.intensity_weight_gaussians is not None:
+                # Smooth target and pred using separable Gaussian filtering
+                target_smooth = separable_filtering(target, self.intensity_weight_gaussians)
+                pred_smooth = separable_filtering(pred, self.intensity_weight_gaussians)
+            else:
+                # No smoothing (sigma=0)
+                target_smooth = target
+                pred_smooth = pred
+
+            # Compute weights as mean intensity of smoothed images
+            # Higher intensity voxels (brain tissue) get more weight than background
+            weights = (target_smooth.abs() + pred_smooth.abs()) / 2.0
+            # Normalize weights to maintain loss scale (sum to number of elements)
+            weights = weights / (weights.mean() + 1e-8)
+            # Apply weights to ncc (computed from non-smoothed images)
+            weighted_ncc = ncc * weights
+        else:
+            weighted_ncc = ncc
+
         if self.reduction == 'sum':
-            return torch.sum(ncc).neg()  # sum over the batch, channel and spatial ndims
+            return torch.sum(weighted_ncc).neg()  # sum over the batch, channel and spatial ndims
         if self.reduction == 'none':
-            return ncc.neg()
+            return weighted_ncc.neg()
         if self.reduction == 'mean':
-            return torch.mean(ncc).neg()  # average over the batch, channel and spatial ndims
+            if self.intensity_weighting:
+                # Weighted mean: sum(ncc * weights) / sum(weights)
+                # But we already normalized weights to mean=1, so just use regular mean
+                return torch.mean(weighted_ncc).neg()
+            else:
+                return torch.mean(weighted_ncc).neg()  # average over the batch, channel and spatial ndims
         raise ValueError(f'Unsupported reduction: {self.reduction}, available options are ["mean", "sum", "none"].')
 
 
