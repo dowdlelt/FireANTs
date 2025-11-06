@@ -59,10 +59,11 @@ class AbstractRegistration(ABC):
             - 'cc': Cross correlation (default)
                 Local normalized cross correlation between the fixed image and the moved image is measured using a kernel of size `cc_kernel_size`. This is a de-facto standard similarity metric for both linear and non-linear image registration. It also consumes less very little memory than mutual information.
                 Cross correlation is implemented using the `LocalNormalizedCrossCorrelationLoss` class.
-            - 'scc': Stretched cross correlation
-                Similar to CC but applies arctanh transformation to emphasize higher correlation values. Based on AFNI's lpc cost function.
-                The transformation pc = arctanh(ncc) is weighted by pc*abs(pc) to give larger correlations more impact.
-                Implemented using the `StretchedCrossCorrelationLoss` class.
+            - 'scc': Stretched cross correlation (lpa variant)
+                Similar to CC but applies arctanh transformation to emphasize higher correlation values. Based on AFNI's lpa cost function.
+                The transformation pc = arctanh(ncc) is weighted by pc*abs(pc), then lpa = 1 - abs(mean(pc*abs(pc))).
+                Uses lpa variant by default (recommended for similar contrast volumes).
+                Implemented using the `StretchedCrossCorrelationLoss` class with use_absolute=True.
             - 'mse': Mean squared error
                 Mean squared error is implemented using the `MeanSquaredError` class.
                 This is the fastest similarity metric, but it is not robust to outliers, multi-modal images, or even intensity inhomogeneities within the same modality. Good for testing registration pipelines.

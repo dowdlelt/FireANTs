@@ -27,24 +27,38 @@ class StretchedCrossCorrelationLoss(LocalNormalizedCrossCorrelationLoss):
 
     Extends the standard local normalized cross-correlation by applying an
     arctanh transformation to stretch higher correlation values, giving them
-    more emphasis in the final loss. This is based on AFNI's lpc cost function.
+    more emphasis in the final loss. This is based on AFNI's lpc/lpa cost functions.
+
+    Two variants:
+    - lpc (use_absolute=False): minimizes weighted mean of pc*abs(pc)
+      Good when you want positive correlation
+    - lpa (use_absolute=True, default): minimizes 1 - abs(lpc)
+      Good for similar contrast volumes, maximizes absolute correlation
+      AFNI recommends lpa as first choice for similar contrast alignment
 
     The transformation:
     1. Compute NCC as usual: ncc ∈ [-1, 1]
     2. Apply stretching: pc = arctanh(ncc) = 0.5 * log((1+ncc)/(1-ncc))
     3. Emphasize with squared term: stretched = pc * abs(pc) = pc²·sign(pc)
-    4. Aggregate (weighted if intensity_weighting=True)
+    4. Aggregate to lpc = weighted_mean(stretched)
+    5. If use_absolute: lpa = 1 - abs(lpc), else: return lpc
 
-    This makes high positive correlations (near 1.0) have much larger impact
+    This makes high correlations (near ±1.0) have much larger impact
     on the loss than moderate correlations, encouraging better alignment.
 
     Inherits all parameters from LocalNormalizedCrossCorrelationLoss.
+
+    Args:
+        use_absolute: If True (default), use lpa variant (1 - abs(lpc)).
+                     Recommended for similar contrast volumes.
+                     If False, use lpc variant (just lpc itself).
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, use_absolute: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
         # Small epsilon for numerical stability in arctanh
         self.eps = 1e-7
+        self.use_absolute = use_absolute
 
     def forward(self, target: torch.Tensor, pred: torch.Tensor) -> torch.Tensor:
         """
@@ -55,7 +69,7 @@ class StretchedCrossCorrelationLoss(LocalNormalizedCrossCorrelationLoss):
             pred: Predicted/warped image tensor
 
         Returns:
-            Scalar loss value (negative of stretched correlation)
+            Scalar loss value (lpa or lpc to minimize)
         """
         # Get parent class NCC computation logic by calling super().forward()
         # But we need to get the ncc values before reduction, so we'll replicate
@@ -101,12 +115,23 @@ class StretchedCrossCorrelationLoss(LocalNormalizedCrossCorrelationLoss):
         else:
             weighted_stretched = stretched
 
-        # Apply reduction
-        if self.reduction == 'sum':
-            return torch.sum(weighted_stretched).neg()  # negative because we maximize correlation
-        elif self.reduction == 'none':
-            return weighted_stretched.neg()
-        elif self.reduction == 'mean':
-            return torch.mean(weighted_stretched).neg()
+        # Compute lpc = weighted mean of stretched values
+        if original_reduction == 'sum':
+            lpc = torch.sum(weighted_stretched)
+        elif original_reduction == 'mean':
+            lpc = torch.mean(weighted_stretched)
+        else:  # 'none' - shouldn't happen in practice for registration
+            lpc = torch.mean(weighted_stretched)
+
+        # Apply lpa transformation if requested: lpa = 1 - abs(lpc)
+        # This makes the loss always positive and minimizes to 0 for perfect correlation
+        if self.use_absolute:
+            # lpa variant: maximize absolute correlation (works for both positive and negative)
+            # Smaller lpa = better (approaches 0 when |lpc| is large)
+            loss = 1.0 - torch.abs(lpc)
         else:
-            raise ValueError(f'Unsupported reduction: {self.reduction}')
+            # lpc variant: minimize lpc directly (assumes positive correlation desired)
+            # Negative lpc = good, positive lpc = bad
+            loss = -lpc
+
+        return loss
