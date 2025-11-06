@@ -193,6 +193,10 @@ def parse_metric(metric_str: str) -> Tuple[str, List[Union[str, float]]]:
         pd['loss_type'] = 'cc'
         pd['cc_kernel_size'] = int(params[2]) if len(params) > 2 else 5
         opt_id = 3
+    elif metric_type in ['SCC', 'StretchedCC', 'StretchedCorrelation']:
+        pd['loss_type'] = 'scc'
+        pd['cc_kernel_size'] = int(params[2]) if len(params) > 2 else 5
+        opt_id = 3
     elif metric_type in ['MI', 'MutualInformation']:
         pd['loss_type'] = 'mi'
         pd['mi_kernel_type'] = params[2] if len(params) > 2 else 'gaussian'
@@ -524,8 +528,8 @@ def main():
         moving_path = metric_params['moving']
         del metric_params['fixed'], metric_params['moving']
 
-        # Add intensity weighting for CC loss if requested
-        if args.intensity_weighted_cc is not None and metric_params.get('loss_type') == 'cc':
+        # Add intensity weighting for CC/SCC loss if requested
+        if args.intensity_weighted_cc is not None and metric_params.get('loss_type') in ['cc', 'scc']:
             if 'loss_params' not in metric_params:
                 metric_params['loss_params'] = {}
             metric_params['loss_params']['intensity_weighting'] = True

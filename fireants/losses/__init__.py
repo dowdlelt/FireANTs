@@ -15,6 +15,7 @@
 
 from .mi import GlobalMutualInformationLoss
 from .cc import LocalNormalizedCrossCorrelationLoss
+from .scc import StretchedCrossCorrelationLoss
 from .mse import NoOp, MeanSquaredError
 
-__all__ = ['GlobalMutualInformationLoss', 'LocalNormalizedCrossCorrelationLoss', 'NoOp', 'MeanSquaredError']
+__all__ = ['GlobalMutualInformationLoss', 'LocalNormalizedCrossCorrelationLoss', 'StretchedCrossCorrelationLoss', 'NoOp', 'MeanSquaredError']

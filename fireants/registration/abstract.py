@@ -18,7 +18,7 @@ from typing import List
 import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
-from fireants.losses import GlobalMutualInformationLoss, LocalNormalizedCrossCorrelationLoss, NoOp, MeanSquaredError
+from fireants.losses import GlobalMutualInformationLoss, LocalNormalizedCrossCorrelationLoss, StretchedCrossCorrelationLoss, NoOp, MeanSquaredError
 from torch.optim import SGD, Adam
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from typing import Optional, Union
@@ -57,8 +57,12 @@ class AbstractRegistration(ABC):
                 Global mutual information between the fixed image and the moved image is measured using Parzen windowing using different kernel types.
                 Mutual information is implemented using the `GlobalMutualInformationLoss` class.
             - 'cc': Cross correlation (default)
-                Local normalized cross correlation between the fixed image and the moved image is measured using a kernel of size `cc_kernel_size`. This is a de-facto standard similarity metric for both linear and non-linear image registration. It also consumes less very little memory than mutual information.  
+                Local normalized cross correlation between the fixed image and the moved image is measured using a kernel of size `cc_kernel_size`. This is a de-facto standard similarity metric for both linear and non-linear image registration. It also consumes less very little memory than mutual information.
                 Cross correlation is implemented using the `LocalNormalizedCrossCorrelationLoss` class.
+            - 'scc': Stretched cross correlation
+                Similar to CC but applies arctanh transformation to emphasize higher correlation values. Based on AFNI's lpc cost function.
+                The transformation pc = arctanh(ncc) is weighted by pc*abs(pc) to give larger correlations more impact.
+                Implemented using the `StretchedCrossCorrelationLoss` class.
             - 'mse': Mean squared error
                 Mean squared error is implemented using the `MeanSquaredError` class.
                 This is the fastest similarity metric, but it is not robust to outliers, multi-modal images, or even intensity inhomogeneities within the same modality. Good for testing registration pipelines.
@@ -132,8 +136,11 @@ class AbstractRegistration(ABC):
         if loss_type == 'mi':
             self.loss_fn = GlobalMutualInformationLoss(kernel_type=mi_kernel_type, reduction=reduction, **loss_params)
         elif loss_type == 'cc':
-            self.loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims, 
+            self.loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
                                                                kernel_size=cc_kernel_size, reduction=reduction, **loss_params)
+        elif loss_type == 'scc':
+            self.loss_fn = StretchedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
+                                                         kernel_size=cc_kernel_size, reduction=reduction, **loss_params)
         elif loss_type == 'fusedcc':
             from fireants.losses.fusedcc import FusedLocalNormalizedCrossCorrelationLoss
             self.loss_fn = FusedLocalNormalizedCrossCorrelationLoss(spatial_dims=self.dims, 
