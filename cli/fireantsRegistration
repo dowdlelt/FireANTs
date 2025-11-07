@@ -191,11 +191,31 @@ def parse_metric(metric_str: str) -> Tuple[str, List[Union[str, float]]]:
         opt_id = 2
     elif metric_type in ['CC', 'Correlation']:
         pd['loss_type'] = 'cc'
-        pd['cc_kernel_size'] = int(params[2]) if len(params) > 2 else 5
+        # Parse kernel size - can be int (isotropic) or "3x7x3" (anisotropic)
+        if len(params) > 2:
+            kernel_str = str(params[2])
+            if 'x' in kernel_str:
+                # Anisotropic kernel: "3x7x3"
+                pd['cc_kernel_size'] = [int(k) for k in kernel_str.split('x')]
+            else:
+                # Isotropic kernel: "5"
+                pd['cc_kernel_size'] = int(params[2])
+        else:
+            pd['cc_kernel_size'] = 5
         opt_id = 3
     elif metric_type in ['SCC', 'StretchedCC', 'StretchedCorrelation']:
         pd['loss_type'] = 'scc'
-        pd['cc_kernel_size'] = int(params[2]) if len(params) > 2 else 5
+        # Parse kernel size - can be int (isotropic) or "3x7x3" (anisotropic)
+        if len(params) > 2:
+            kernel_str = str(params[2])
+            if 'x' in kernel_str:
+                # Anisotropic kernel: "3x7x3"
+                pd['cc_kernel_size'] = [int(k) for k in kernel_str.split('x')]
+            else:
+                # Isotropic kernel: "5"
+                pd['cc_kernel_size'] = int(params[2])
+        else:
+            pd['cc_kernel_size'] = 5
         opt_id = 3
     elif metric_type in ['MI', 'MutualInformation']:
         pd['loss_type'] = 'mi'

@@ -21,7 +21,7 @@ import torch
 from torch.utils.checkpoint import checkpoint
 from torch import nn
 from torch.nn import functional as F
-from typing import List
+from typing import List, Union
 from fireants.types import ItemOrList
 
 # @torch.jit.script
@@ -208,7 +208,7 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
     def __init__(
         self,
         spatial_dims: int = 3,
-        kernel_size: int = 3,
+        kernel_size: Union[int, List[int]] = 3,
         kernel_type: str = "rectangular",
         reduction: str = "mean",
         smooth_nr: float = 1e-5,   # careful: perform degrades when this parameter is set to 0
@@ -222,7 +222,9 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         """
         Args:
             spatial_dims: number of spatial dimensions, {``1``, ``2``, ``3``}. Defaults to 3.
-            kernel_size: kernel spatial size, must be odd.
+            kernel_size: kernel spatial size, must be odd. Can be:
+                - int: isotropic kernel (same size in all dimensions)
+                - List[int]: anisotropic kernel (different size per dimension, e.g. [3, 7, 3])
             kernel_type: {``"rectangular"``, ``"triangular"``, ``"gaussian"``}. Defaults to ``"rectangular"``.
             reduction: {``"none"``, ``"mean"``, ``"sum"``}
                 Specifies the reduction to apply to the output. Defaults to ``"mean"``.
@@ -247,15 +249,38 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         self.reduction = reduction
         self.unsigned = unsigned
 
-        self.kernel_size = kernel_size
-        if self.kernel_size % 2 == 0:
-            raise ValueError(f"kernel_size must be odd, got {self.kernel_size}")
+        # Handle isotropic or anisotropic kernel sizes
+        if isinstance(kernel_size, int):
+            self.kernel_sizes = [kernel_size] * self.ndim
+            self.is_isotropic = True
+        else:
+            if len(kernel_size) != self.ndim:
+                raise ValueError(f"kernel_size list must have {self.ndim} elements, got {len(kernel_size)}")
+            self.kernel_sizes = list(kernel_size)
+            self.is_isotropic = False
 
-        # _kernel = look_up_option(kernel_type, kernel_dict)
-        _kernel = kernel_dict[kernel_type]
-        self.kernel = _kernel(self.kernel_size)
-        self.kernel = self.kernel / self.kernel.sum()
-        self.kernel.requires_grad = False
+        # Validate all kernel sizes are odd
+        for i, ks in enumerate(self.kernel_sizes):
+            if ks % 2 == 0:
+                raise ValueError(f"kernel_size[{i}] must be odd, got {ks}")
+
+        # Create kernels for each dimension
+        _kernel_fn = kernel_dict[kernel_type]
+        self.kernels = []
+        for ks in self.kernel_sizes:
+            kernel = _kernel_fn(ks)
+            kernel = kernel / kernel.sum()
+            kernel.requires_grad = False
+            self.kernels.append(kernel)
+
+        # For backward compatibility, keep single kernel if isotropic
+        if self.is_isotropic:
+            self.kernel = self.kernels[0]
+            self.kernel_size = self.kernel_sizes[0]
+        else:
+            self.kernel = self.kernels[0]  # For compatibility, use first dimension
+            self.kernel_size = max(self.kernel_sizes)  # Use max for padding calculation
+
         self.kernel_nd, self.kernel_vol = self.get_kernel_vol()   # get nD kernel and its volume
         self.smooth_nr = float(smooth_nr)
         self.smooth_dr = float(smooth_dr)
@@ -275,9 +300,13 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         return (self.kernel_size - 1) // 2
 
     def get_kernel_vol(self):
-        vol = self.kernel
-        for _ in range(self.ndim - 1):
-            vol = torch.matmul(vol.unsqueeze(-1), self.kernel.unsqueeze(0))
+        """Compute the nD kernel volume by taking outer products of 1D kernels.
+
+        For anisotropic kernels, uses different 1D kernels per dimension.
+        """
+        vol = self.kernels[0]
+        for i in range(1, self.ndim):
+            vol = torch.matmul(vol.unsqueeze(-1), self.kernels[i].unsqueeze(0))
         return vol, torch.sum(vol)
     
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -294,14 +323,15 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             raise ValueError(f"ground truth has differing shape ({target.shape}) from pred ({pred.shape})")
 
         # sum over kernel
-        def cc_checkpoint_fn(target, pred, kernel, kernel_vol, checkpointing=False):
+        def cc_checkpoint_fn(target, pred, kernel, kernel_vol, aniso_kernels, checkpointing=False):
             '''
             This function is used to compute the intermediate results of the loss.
             '''
             t2, p2, tp = target * target, pred * pred, target * pred
             kernel, kernel_vol = kernel.to(pred), kernel_vol.to(pred)
             # kernel_nd = self.kernel_nd.to(pred)
-            kernels = [kernel] * self.ndim
+            # Use anisotropic kernels if provided, otherwise fall back to isotropic
+            kernels = [k.to(pred) for k in aniso_kernels] if aniso_kernels else [kernel] * self.ndim
             kernels_t = kernels_p = kernels
             kernel_vol_t = kernel_vol_p = kernel_vol
             # compute intermediates
@@ -365,7 +395,7 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
                     ncc = ncc_filter(cross, t_var, p_var)
             return ncc
         
-        ncc = cc_checkpoint_fn(target, pred, self.kernel, self.kernel_vol, checkpointing=self.checkpointing)
+        ncc = cc_checkpoint_fn(target, pred, self.kernel, self.kernel_vol, self.kernels if not self.is_isotropic else None, checkpointing=self.checkpointing)
         # clamp (dont really need this because the offending pixels are very sparse)
         ncc = ncc.clamp(min=-1, max=1)
 
