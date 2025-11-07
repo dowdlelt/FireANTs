@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+# Copyright (c) 2025 Rohit Jena. All rights reserved.
+#
+# This file is part of FireANTs, distributed under the terms of
+# the FireANTs License version 1.0. A copy of the license can be found
+# in the LICENSE file at the root of this repository.
+#
+# IMPORTANT: This code is part of FireANTs and its use, reproduction, or
+# distribution must comply with the full license terms, including:
+# - Maintaining all copyright notices and bibliography references
+# - Using only approved (re)-distribution channels
+# - Proper attribution in derivative works
+#
+# For full license details: https://github.com/rohitrango/FireANTs/blob/main/LICENSE
+
+
+"""
+Ultra-fast timeseries (4D) volume registration CLI.
+
+Optimized for registering 50-200 frame timeseries with maximum GPU utilization.
+"""
+
+import argparse
+import sys
+import logging
+from pathlib import Path
+import torch
+
+from fireants.io.timeseries import load_4d_nifti, load_frame_directory
+from fireants.registration.timeseries import TimeseriesRegistration
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='FireANTs Timeseries Registration - Ultra-fast 4D volume registration',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Basic: Register 4D volume to first frame with Greedy
+  fireantsTimeseriesRegistration \\
+    --timeseries bold.nii.gz \\
+    --output output/ts \\
+    --transform Greedy[0.25] \\
+    --metric CC[5] \\
+    --convergence [100x50x25,1e-6,10] \\
+    --shrink-factors 4x2x1
+
+  # Advanced: Rigid+SyN pipeline, external template, sequential mode
+  fireantsTimeseriesRegistration \\
+    --timeseries frames/ \\
+    --reference template.nii.gz \\
+    --output output/ts \\
+    --transform Rigid+SyN[0.1] \\
+    --mode sequential \\
+    --chunk-size 10 \\
+    --metric CC[5]:0.7 MI[32]:0.3
+
+  # Memory-constrained: Small chunks, rigid only
+  fireantsTimeseriesRegistration \\
+    --timeseries large_series.nii.gz \\
+    --output output/rigid \\
+    --transform Rigid \\
+    --chunk-size 5
+        '''
+    )
+
+    # Input/output
+    parser.add_argument('--timeseries', type=str, required=True,
+                      help='Path to 4D NIfTI file OR directory of 3D volumes')
+    parser.add_argument('--output', type=str, required=True,
+                      help='Output prefix for results (e.g., output/timeseries)')
+    parser.add_argument('--reference', type=str, default='first',
+                      help='Reference for registration: "first" (default), frame index (e.g., "10"), or path to external template')
+
+    # Registration configuration
+    parser.add_argument('--transform', type=str, required=True,
+                      help='Transform type(s): Rigid, Affine, Greedy, SyN. Chain with + (e.g., Rigid+SyN[0.1])')
+    parser.add_argument('--metric', type=str, default='CC[5]',
+                      help='Similarity metric: CC[kernel_size], MI[num_bins], etc. Can specify weights with : (e.g., CC[5]:0.7)')
+    parser.add_argument('--convergence', type=str, default='[100x50x25,1e-6,10]',
+                      help='Convergence: [iterations,tolerance,window] (e.g., [100x50x25,1e-6,10])')
+    parser.add_argument('--shrink-factors', type=str, default='4x2x1',
+                      help='Multi-resolution shrink factors (e.g., 4x2x1)')
+
+    # Timeseries-specific options
+    parser.add_argument('--mode', type=str, default='parallel', choices=['parallel', 'sequential'],
+                      help='Registration mode: parallel (all→ref, default) or sequential (0→1→2...)')
+    parser.add_argument('--chunk-size', type=int, default=None,
+                      help='Frames per batch (default: auto-detect from GPU memory)')
+
+    # Device and performance
+    parser.add_argument('--device', type=str, default='cuda:0',
+                      help='Device to run on (default: cuda:0)')
+    parser.add_argument('--dtype', type=str, default='float32', choices=['float32', 'float16', 'bfloat16'],
+                      help='Data type for computation (default: float32)')
+    parser.add_argument('--verbose', action='store_true',
+                      help='Enable verbose logging')
+
+    return parser.parse_args()
+
+
+def parse_transform(transform_str: str):
+    """Parse transform string like 'Rigid' or 'Rigid+SyN[0.1]' or 'Greedy[0.25,smooth_grad_sigma=1.0]'"""
+    transforms = []
+    params_dict = {}
+
+    # Split by + for chained transforms
+    for part in transform_str.split('+'):
+        if '[' in part:
+            transform_type = part.split('[')[0]
+            params_str = part.split('[')[1].rstrip(']')
+
+            # Parse parameters
+            params = {}
+            for param in params_str.split(','):
+                if '=' in param:
+                    key, val = param.split('=')
+                    try:
+                        params[key] = float(val)
+                    except ValueError:
+                        params[key] = val
+                else:
+                    # First parameter without key is smooth_warp_sigma for Greedy/SyN
+                    if transform_type in ['Greedy', 'SyN']:
+                        params['smooth_warp_sigma'] = float(param)
+
+            params_dict[transform_type] = params
+        else:
+            transform_type = part
+
+        transforms.append(transform_type)
+
+    return transforms, params_dict
+
+
+def parse_metric(metric_str: str):
+    """Parse metric string like 'CC[5]' or 'MI[32]:0.7'"""
+    # Extract weight if present
+    weight = 1.0
+    if ':' in metric_str:
+        metric_str, weight_str = metric_str.rsplit(':', 1)
+        weight = float(weight_str)
+
+    # Parse metric type and parameters
+    metric_type = metric_str.split('[')[0]
+    params_str = metric_str.split('[')[1].rstrip(']')
+    params = [p.strip() for p in params_str.split(',')]
+
+    metric_params = {'weight': weight}
+
+    if metric_type in ['CC', 'Correlation']:
+        metric_params['loss_type'] = 'cc'
+        metric_params['cc_kernel_size'] = int(params[0]) if params else 5
+    elif metric_type in ['MI', 'MutualInformation']:
+        metric_params['loss_type'] = 'mi'
+        metric_params['loss_params'] = {'num_bins': int(params[0])} if params else {'num_bins': 32}
+    elif metric_type in ['MSE', 'MeanSquares']:
+        metric_params['loss_type'] = 'mse'
+    else:
+        raise ValueError(f"Unsupported metric type: {metric_type}")
+
+    return metric_params
+
+
+def parse_convergence(conv_str: str):
+    """Parse convergence string like '[100x50x25,1e-6,10]'"""
+    conv_str = conv_str.strip('[]')
+    parts = [p.strip() for p in conv_str.split(',')]
+
+    iterations = [int(x) for x in parts[0].split('x')]
+    tolerance = float(parts[1]) if len(parts) > 1 else 1e-6
+    window = int(parts[2]) if len(parts) > 2 else 10
+
+    return iterations, tolerance, window
+
+
+def load_timeseries(timeseries_path: str, dtype: torch.dtype, device: str):
+    """Load timeseries from 4D file or directory."""
+    path = Path(timeseries_path)
+
+    if path.is_dir():
+        logger.info(f"Loading timeseries from directory: {timeseries_path}")
+        frames = load_frame_directory(timeseries_path, dtype=dtype, device=device)
+    elif path.suffix in ['.nii', '.gz']:
+        logger.info(f"Loading 4D NIfTI file: {timeseries_path}")
+        frames = load_4d_nifti(timeseries_path, dtype=dtype, device=device)
+    else:
+        raise ValueError(f"Unsupported timeseries format: {timeseries_path}")
+
+    return frames
+
+
+def load_reference(reference_str: str, frames, dtype: torch.dtype, device: str):
+    """Load reference image based on specification."""
+    if reference_str == 'first':
+        logger.info("Using first frame as reference")
+        return frames[0]
+    elif reference_str.isdigit():
+        frame_idx = int(reference_str)
+        if frame_idx >= len(frames):
+            raise ValueError(f"Reference frame index {frame_idx} out of range (have {len(frames)} frames)")
+        logger.info(f"Using frame {frame_idx} as reference")
+        return frames[frame_idx]
+    else:
+        # External template file
+        from fireants.io.image import Image
+        logger.info(f"Loading external reference: {reference_str}")
+        return Image.load_file(reference_str, dtype=dtype, device=device)
+
+
+def main():
+    args = parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # Parse dtype
+    dtype_map = {
+        'float32': torch.float32,
+        'float16': torch.float16,
+        'bfloat16': torch.bfloat16
+    }
+    dtype = dtype_map[args.dtype]
+
+    # Load timeseries
+    frames = load_timeseries(args.timeseries, dtype, args.device)
+    logger.info(f"Loaded {len(frames)} frames")
+
+    # Load reference
+    reference = load_reference(args.reference, frames, dtype, args.device)
+
+    # Parse registration configuration
+    transform_types, transform_params = parse_transform(args.transform)
+    metric_params = parse_metric(args.metric)
+    iterations, tolerance, window = parse_convergence(args.convergence)
+    shrink_factors = [float(x) for x in args.shrink_factors.split('x')]
+
+    # Build registration parameters for each transform type
+    registration_params = {}
+    for transform_type in transform_types:
+        params = {
+            'scales': shrink_factors,
+            'iterations': iterations,
+            'tolerance': tolerance,
+            'max_tolerance_iters': window,
+            **metric_params,
+            **transform_params.get(transform_type, {})
+        }
+        registration_params[transform_type] = params
+
+    # Log configuration
+    logger.info(f"Configuration:")
+    logger.info(f"  Transform pipeline: {' → '.join(transform_types)}")
+    logger.info(f"  Mode: {args.mode}")
+    logger.info(f"  Metric: {args.metric}")
+    logger.info(f"  Convergence: {args.convergence}")
+    logger.info(f"  Shrink factors: {args.shrink_factors}")
+    logger.info(f"  Chunk size: {args.chunk_size or 'auto'}")
+
+    # Create timeseries registration
+    ts_reg = TimeseriesRegistration(
+        frames=frames,
+        reference=reference,
+        transform_types=transform_types,
+        mode=args.mode,
+        chunk_size=args.chunk_size,
+        registration_params=registration_params,
+        output_prefix=args.output,
+        device=args.device,
+        progress_bar=not args.verbose
+    )
+
+    # Run registration
+    logger.info("\n" + "="*80)
+    logger.info("Starting timeseries registration...")
+    logger.info("="*80 + "\n")
+
+    results = ts_reg.register()
+
+    # Report results
+    logger.info("\n" + "="*80)
+    logger.info("Timeseries registration completed successfully!")
+    logger.info("="*80)
+    for transform_type, transforms in results.items():
+        logger.info(f"  {transform_type}: {len(transforms)} transforms saved")
+
+    # Create summary file
+    summary_path = f"{args.output}_summary.txt"
+    with open(summary_path, 'w') as f:
+        f.write("FireANTs Timeseries Registration Summary\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Input: {args.timeseries}\n")
+        f.write(f"Frames: {len(frames)}\n")
+        f.write(f"Reference: {args.reference}\n")
+        f.write(f"Transform pipeline: {' → '.join(transform_types)}\n")
+        f.write(f"Mode: {args.mode}\n")
+        f.write(f"Output prefix: {args.output}\n\n")
+        f.write("Results:\n")
+        for transform_type, transforms in results.items():
+            f.write(f"  {transform_type}: {len(transforms)} transforms\n")
+            f.write(f"    Saved to: {args.output}_{transform_type}_all.npz\n")
+
+    logger.info(f"\nSummary saved to: {summary_path}")
+    logger.info("Done!")
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        sys.exit(1)
