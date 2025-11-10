@@ -453,11 +453,16 @@ class TimeseriesRegistration:
         output_path = f"{self.output_prefix}_warped.nii.gz"
         logger.info(f"Saving warped 4D timeseries to {output_path}")
 
-        # Stack into 4D array [H, W, D, T]
+        # Stack into 4D array
+        # Each volume is [D, H, W] (z, y, x from SimpleITK's GetArrayFromImage ordering)
+        # Stack along last axis: [D, H, W, T]
         warped_4d = np.stack(self.warped_volumes, axis=-1)
+        logger.debug(f"Warped 4D shape before transpose: {warped_4d.shape}")
 
-        # SimpleITK expects [T, D, H, W] for 4D data
-        warped_4d_sitk = np.transpose(warped_4d, (3, 2, 0, 1))  # [H,W,D,T] -> [T,D,W,H]
+        # SimpleITK expects [T, D, H, W] for 4D data (time, z, y, x)
+        # Transpose from [D, H, W, T] -> [T, D, H, W]
+        warped_4d_sitk = np.transpose(warped_4d, (3, 0, 1, 2))  # [z,y,x,T] -> [T,z,y,x]
+        logger.debug(f"Warped 4D shape after transpose: {warped_4d_sitk.shape}")
 
         itk_4d = sitk.GetImageFromArray(warped_4d_sitk)
 
