@@ -30,6 +30,7 @@ from fireants.registration.rigid import RigidRegistration
 from fireants.registration.affine import AffineRegistration
 from fireants.registration.greedy import GreedyRegistration
 from fireants.registration.syn import SyNRegistration
+from fireants.interpolator import fireants_interpolator
 
 logger = logging.getLogger(__name__)
 
