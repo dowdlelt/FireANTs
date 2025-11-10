@@ -64,7 +64,6 @@ def load_4d_nifti(file_path: str, dtype: torch.dtype = torch.float32,
 
     # Extract each 3D frame
     frames = []
-    extractor = sitk.Extract()
 
     for t in range(num_frames):
         # Set extraction region: all spatial dimensions, single timepoint
@@ -72,11 +71,8 @@ def load_4d_nifti(file_path: str, dtype: torch.dtype = torch.float32,
         extraction_region[3] = 0  # Collapse time dimension
         extraction_index = [0, 0, 0, t]  # Start at timepoint t
 
-        extractor.SetSize(extraction_region)
-        extractor.SetIndex(extraction_index)
-
-        # Extract 3D volume
-        itk_image_3d = extractor.Execute(itk_image_4d)
+        # Extract 3D volume using functional interface
+        itk_image_3d = sitk.Extract(itk_image_4d, extraction_region, extraction_index)
 
         # Create Image object from the 3D volume
         # We pass the already-loaded itk_image instead of a file path
