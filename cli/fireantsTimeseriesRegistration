@@ -90,6 +90,8 @@ Examples:
                       help='Registration mode: parallel (all→ref, default) or sequential (0→1→2...)')
     parser.add_argument('--chunk-size', type=int, default=None,
                       help='Frames per batch (default: auto-detect from GPU memory)')
+    parser.add_argument('--save-warped', action='store_true',
+                      help='Save warped timeseries during registration (applies warps immediately while on GPU for efficiency)')
 
     # Device and performance
     parser.add_argument('--device', type=str, default='cuda:0',
@@ -274,7 +276,8 @@ def main():
         registration_params=registration_params,
         output_prefix=args.output,
         device=args.device,
-        progress_bar=not args.verbose
+        progress_bar=not args.verbose,
+        save_warped_timeseries=args.save_warped
     )
 
     # Run registration
@@ -306,8 +309,12 @@ def main():
         for transform_type, transforms in results.items():
             f.write(f"  {transform_type}: {len(transforms)} transforms\n")
             f.write(f"    Saved to: {args.output}_{transform_type}_all.npz\n")
+        if args.save_warped:
+            f.write(f"\n  Warped timeseries: {args.output}_warped.nii.gz\n")
 
     logger.info(f"\nSummary saved to: {summary_path}")
+    if args.save_warped:
+        logger.info(f"Warped timeseries: {args.output}_warped.nii.gz")
     logger.info("Done!")
 
 

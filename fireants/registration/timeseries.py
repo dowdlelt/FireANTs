@@ -82,7 +82,8 @@ class TimeseriesRegistration:
                  registration_params: Optional[Dict[str, Dict[str, Any]]] = None,
                  output_prefix: str = 'output/timeseries',
                  device: str = 'cuda:0',
-                 progress_bar: bool = True):
+                 progress_bar: bool = True,
+                 save_warped_timeseries: bool = False):
 
         self.frames = frames
         self.reference = reference
@@ -91,6 +92,10 @@ class TimeseriesRegistration:
         self.device = device
         self.progress_bar = progress_bar
         self.output_prefix = output_prefix
+        self.save_warped_timeseries = save_warped_timeseries
+
+        # Storage for warped volumes (if saving)
+        self.warped_volumes = [] if save_warped_timeseries else None
 
         # Auto-detect chunk size if not provided
         if chunk_size is None:
@@ -213,6 +218,12 @@ class TimeseriesRegistration:
                 prev_transform = reg
                 prev_transform_type = transform_type
 
+            # Apply warps and save warped volumes if requested
+            if self.save_warped_timeseries:
+                logger.info(f"  Applying warps to chunk...")
+                warped_chunk = self._apply_warps_to_chunk(reg, moving_batch, transform_type)
+                self.warped_volumes.extend(warped_chunk)
+
             # Free GPU memory
             del fixed_batch, moving_batch, reg
             torch.cuda.empty_cache()
@@ -220,6 +231,10 @@ class TimeseriesRegistration:
         # Save final bundled transforms
         for transform_type in self.transform_types:
             self._save_final_bundle(all_transforms[transform_type], transform_type)
+
+        # Save warped timeseries if accumulated
+        if self.save_warped_timeseries and self.warped_volumes:
+            self._save_warped_4d_timeseries()
 
         logger.info("\nParallel registration completed successfully")
         return all_transforms
@@ -361,6 +376,107 @@ class TimeseriesRegistration:
         bundle_path = f"{self.output_prefix}_{transform_type}_all.npz"
         save_transform_bundle(transforms, bundle_path, transform_type=transform_type.lower())
         logger.info(f"Saved {len(transforms)} {transform_type} transforms to {bundle_path}")
+
+    def _apply_warps_to_chunk(self, reg, moving_batch: BatchedImages, transform_type: str) -> List[np.ndarray]:
+        """Apply transformations to moving images and return warped volumes.
+
+        Args:
+            reg: Registration object with computed transformations
+            moving_batch: BatchedImages of moving frames
+            transform_type: Type of transformation
+
+        Returns:
+            List of warped volume arrays (CPU numpy arrays) [H, W, D]
+        """
+        # Get the transformation parameters
+        if transform_type in ['Rigid', 'Affine']:
+            # For rigid/affine, we need to apply the transformation
+            warp_params = reg.get_warp_parameters(
+                BatchedImages([self.reference]),
+                moving_batch
+            )
+            # Apply affine transformation
+            moving_arrays = moving_batch().to(self.device)  # [N, C, H, W, D]
+            warped = fireants_interpolator(
+                moving_arrays,
+                affine=warp_params['affine'],
+                out_shape=warp_params['out_shape'],
+                mode='bilinear',
+                align_corners=True
+            )
+        elif transform_type == 'Greedy':
+            # Get warp field and apply
+            warp_field = reg.warp.warp  # [N, H, W, D, 3]
+            moving_arrays = moving_batch().to(self.device)
+            warped = fireants_interpolator(
+                moving_arrays,
+                affine=None,
+                grid=warp_field.contiguous(),
+                mode='bilinear',
+                align_corners=True,
+                is_displacement=True
+            )
+        elif transform_type == 'SyN':
+            # Get forward warp field and apply
+            fwd_warp_field = reg.fwd_warp.warp  # [N, H, W, D, 3]
+            moving_arrays = moving_batch().to(self.device)
+            # Need to also apply initial affine if present
+            affine_mat = reg.affine  # [N, D+1, D+1]
+            moving_p2t = moving_batch.get_phy2torch().to(reg.dtype)
+            fixed_t2p = BatchedImages([self.reference]).get_torch2phy().to(reg.dtype)
+            affine_map = (torch.matmul(moving_p2t, torch.matmul(affine_mat, fixed_t2p))[:, :-1]).contiguous()
+
+            warped = fireants_interpolator(
+                moving_arrays,
+                affine=affine_map,
+                grid=fwd_warp_field.contiguous(),
+                mode='bilinear',
+                align_corners=True,
+                is_displacement=True
+            )
+        else:
+            raise ValueError(f"Unknown transform type: {transform_type}")
+
+        # Convert to list of numpy arrays [H, W, D]
+        warped_list = []
+        for i in range(warped.shape[0]):
+            vol = warped[i, 0].detach().cpu().numpy()  # Remove batch and channel dims
+            warped_list.append(vol)
+
+        return warped_list
+
+    def _save_warped_4d_timeseries(self):
+        """Save accumulated warped volumes as 4D NIfTI."""
+        import SimpleITK as sitk
+
+        output_path = f"{self.output_prefix}_warped.nii.gz"
+        logger.info(f"Saving warped 4D timeseries to {output_path}")
+
+        # Stack into 4D array [H, W, D, T]
+        warped_4d = np.stack(self.warped_volumes, axis=-1)
+
+        # SimpleITK expects [T, D, H, W] for 4D data
+        warped_4d_sitk = np.transpose(warped_4d, (3, 2, 0, 1))  # [H,W,D,T] -> [T,D,W,H]
+
+        itk_4d = sitk.GetImageFromArray(warped_4d_sitk)
+
+        # Copy spatial metadata from reference
+        ref_itk = self.reference.itk_image
+        spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing
+        origin_4d = list(ref_itk.GetOrigin()) + [0.0]    # Add time origin
+
+        # Direction matrix for 4D
+        direction_3d = np.array(ref_itk.GetDirection()).reshape(3, 3)
+        direction_4d = np.eye(4)
+        direction_4d[:3, :3] = direction_3d
+
+        itk_4d.SetSpacing(spacing_4d)
+        itk_4d.SetOrigin(origin_4d)
+        itk_4d.SetDirection(direction_4d.flatten().tolist())
+
+        # Save
+        sitk.WriteImage(itk_4d, str(output_path))
+        logger.info(f"Saved {len(self.warped_volumes)} warped volumes to {output_path}")
 
 
 if __name__ == '__main__':
