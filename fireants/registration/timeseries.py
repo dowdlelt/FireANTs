@@ -170,8 +170,8 @@ class TimeseriesRegistration:
             logger.info(f"\nProcessing chunk {chunk_idx + 1}/{num_chunks} (frames {chunk_start}-{chunk_end-1})")
 
             # Create batched images
-            # Broadcast reference to match chunk size
-            fixed_batch = BatchedImages([self.reference]).broadcast(n_frames_in_chunk)
+            # Reference stays as single image - registration will broadcast automatically
+            fixed_batch = BatchedImages([self.reference])
             moving_batch = BatchedImages(chunk_frames)
 
             # Multi-stage registration pipeline

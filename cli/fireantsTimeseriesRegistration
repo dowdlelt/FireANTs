@@ -118,10 +118,14 @@ def parse_transform(transform_str: str):
             for param in params_str.split(','):
                 if '=' in param:
                     key, val = param.split('=')
-                    try:
-                        params[key] = float(val)
-                    except ValueError:
-                        params[key] = val
+                    # Special handling for restrict_deformation: parse "0.1x1x0.1" to list
+                    if key == 'restrict_deformation' and 'x' in val:
+                        params[key] = [float(x) for x in val.split('x')]
+                    else:
+                        try:
+                            params[key] = float(val)
+                        except ValueError:
+                            params[key] = val
                 else:
                     # First parameter without key is smooth_warp_sigma for Greedy/SyN
                     if transform_type in ['Greedy', 'SyN']:
