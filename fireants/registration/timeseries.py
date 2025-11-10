@@ -463,17 +463,16 @@ class TimeseriesRegistration:
 
         # Copy spatial metadata from reference
         ref_itk = self.reference.itk_image
-        spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing
+        spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing (TR)
         origin_4d = list(ref_itk.GetOrigin()) + [0.0]    # Add time origin
 
-        # Direction matrix for 4D
-        direction_3d = np.array(ref_itk.GetDirection()).reshape(3, 3)
-        direction_4d = np.eye(4)
-        direction_4d[:3, :3] = direction_3d
+        # Direction matrix: for 4D images (3D+time), use 3x3 for spatial dims only
+        # Time dimension doesn't have a direction component
+        direction_3d = ref_itk.GetDirection()  # Already flattened list of 9 elements
 
         itk_4d.SetSpacing(spacing_4d)
         itk_4d.SetOrigin(origin_4d)
-        itk_4d.SetDirection(direction_4d.flatten().tolist())
+        itk_4d.SetDirection(direction_3d)  # Use 3x3 spatial direction matrix
 
         # Save
         sitk.WriteImage(itk_4d, str(output_path))
