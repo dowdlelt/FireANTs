@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+# Copyright (c) 2025 Rohit Jena. All rights reserved.
+#
+# This file is part of FireANTs, distributed under the terms of
+# the FireANTs License version 1.0. A copy of the license can be found
+# in the LICENSE file at the root of this repository.
+
+"""
+Export timeseries registration results to standard formats.
+
+Converts NPZ transform bundles to individual warp files and creates warped timeseries.
+"""
+
+import argparse
+import sys
+import logging
+from pathlib import Path
+import torch
+import numpy as np
+import SimpleITK as sitk
+
+from fireants.io.timeseries import load_4d_nifti, load_frame_directory, load_transform_bundle
+from fireants.io.image import Image
+from fireants.interpolator import fireants_interpolator
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Export timeseries registration results to individual warp files and warped volumes',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  # Export from timeseries registration output
+  fireantsTimeseriesExport \\
+    --timeseries original.nii.gz \\
+    --transforms output/timeseries_SyN_all.npz \\
+    --output-dir output/warps/ \\
+    --export-warped output/warped_timeseries.nii.gz
+
+  # Only export individual warp files
+  fireantsTimeseriesExport \\
+    --timeseries original.nii.gz \\
+    --transforms output/timeseries_SyN_all.npz \\
+    --output-dir output/warps/
+        '''
+    )
+
+    parser.add_argument('--timeseries', type=str, required=True,
+                      help='Original timeseries file (4D NIfTI or directory)')
+    parser.add_argument('--transforms', type=str, required=True,
+                      help='Path to transform bundle (NPZ file from timeseries registration)')
+    parser.add_argument('--output-dir', type=str, required=True,
+                      help='Output directory for individual warp files')
+    parser.add_argument('--export-warped', type=str, default=None,
+                      help='Path to save warped timeseries (4D NIfTI). If not specified, skip warping.')
+    parser.add_argument('--reference', type=str, default='first',
+                      help='Reference frame: "first" (default), frame index, or external template path')
+    parser.add_argument('--device', type=str, default='cuda:0',
+                      help='Device for warping (default: cuda:0)')
+    parser.add_argument('--dtype', type=str, default='float32', choices=['float32', 'float16', 'bfloat16'],
+                      help='Data type for computation (default: float32)')
+
+    return parser.parse_args()
+
+
+def save_warp_as_nifti(warp_field: np.ndarray, reference_image: Image, output_path: str):
+    """Save warp field as 4D NIfTI file (3 displacement components).
+
+    Args:
+        warp_field: Displacement field [H, W, D, 3] in voxel coordinates
+        reference_image: Reference Image for spacing/direction/origin
+        output_path: Output file path
+    """
+    # Warp field is [H, W, D, 3], need to permute to [3, D, W, H] for SimpleITK
+    # SimpleITK uses [x, y, z] = [W, H, D] ordering
+    warp_field_sitk = np.transpose(warp_field, (3, 2, 1, 0))  # [3, D, W, H]
+
+    # Create vector image
+    itk_warp = sitk.GetImageFromArray(warp_field_sitk, isVector=True)
+
+    # Copy metadata from reference
+    itk_warp.SetSpacing(reference_image.itk_image.GetSpacing())
+    itk_warp.SetOrigin(reference_image.itk_image.GetOrigin())
+    itk_warp.SetDirection(reference_image.itk_image.GetDirection())
+
+    # Save
+    sitk.WriteImage(itk_warp, str(output_path))
+    logger.debug(f"Saved warp: {output_path}")
+
+
+def apply_warp_to_image(moving_image: Image, warp_field: torch.Tensor,
+                        reference_image: Image, device: str) -> torch.Tensor:
+    """Apply warp field to moving image.
+
+    Args:
+        moving_image: Image to warp
+        warp_field: Displacement field [1, H, W, D, 3] as torch tensor
+        reference_image: Reference Image for output space
+        device: Device to run on
+
+    Returns:
+        Warped image tensor [1, C, H, W, D]
+    """
+    moving_array = moving_image.array.to(device)  # [1, C, H, W, D]
+    warp_field = warp_field.to(device)
+
+    # Apply warp using fireants interpolator
+    warped = fireants_interpolator(
+        moving_array,
+        affine=None,
+        grid=warp_field.contiguous(),
+        mode='bilinear',
+        align_corners=True,
+        is_displacement=True
+    )
+
+    return warped
+
+
+def export_individual_warps(frames, transforms, reference_image, output_dir):
+    """Export individual warp files for each timepoint.
+
+    Args:
+        frames: List of Image objects
+        transforms: List of warp field arrays [H, W, D, 3]
+        reference_image: Reference Image for metadata
+        output_dir: Output directory path
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Exporting {len(transforms)} individual warp files to {output_dir}/")
+
+    for i, warp_array in enumerate(transforms):
+        output_path = output_dir / f"warp_{i:04d}.nii.gz"
+        save_warp_as_nifti(warp_array, reference_image, output_path)
+
+        if (i + 1) % 50 == 0:
+            logger.info(f"  Exported {i + 1}/{len(transforms)} warps...")
+
+    logger.info(f"Successfully exported all {len(transforms)} warp files")
+
+
+def create_warped_timeseries(frames, transforms, reference_image, output_path, device, dtype):
+    """Create warped 4D timeseries volume.
+
+    Args:
+        frames: List of Image objects
+        transforms: List of warp field arrays [H, W, D, 3]
+        reference_image: Reference Image
+        output_path: Output file path for 4D NIfTI
+        device: Device to run on
+        dtype: torch dtype
+    """
+    logger.info(f"Creating warped timeseries: {output_path}")
+    logger.info(f"  Warping {len(frames)} timepoints...")
+
+    warped_volumes = []
+
+    for i, (frame, warp_array) in enumerate(zip(frames, transforms)):
+        # Convert warp to torch tensor [1, H, W, D, 3]
+        warp_tensor = torch.from_numpy(warp_array).unsqueeze(0).to(dtype)
+
+        # Apply warp
+        warped = apply_warp_to_image(frame, warp_tensor, reference_image, device)
+
+        # Move to CPU and extract volume [H, W, D]
+        warped_vol = warped[0, 0].cpu().numpy()  # Remove batch and channel dims
+        warped_volumes.append(warped_vol)
+
+        if (i + 1) % 50 == 0:
+            logger.info(f"    Warped {i + 1}/{len(frames)} timepoints...")
+
+    # Stack into 4D array [H, W, D, T]
+    warped_4d = np.stack(warped_volumes, axis=-1)
+
+    # Create 4D SimpleITK image
+    # SimpleITK expects [T, D, H, W] for 4D data
+    warped_4d_sitk = np.transpose(warped_4d, (3, 2, 0, 1))  # [H,W,D,T] -> [T,D,W,H]
+
+    itk_4d = sitk.GetImageFromArray(warped_4d_sitk)
+
+    # Copy spatial metadata from reference (3D)
+    ref_itk = reference_image.itk_image
+    spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing
+    origin_4d = list(ref_itk.GetOrigin()) + [0.0]    # Add time origin
+
+    # Direction matrix for 4D (append identity for time dimension)
+    direction_3d = np.array(ref_itk.GetDirection()).reshape(3, 3)
+    direction_4d = np.eye(4)
+    direction_4d[:3, :3] = direction_3d
+
+    itk_4d.SetSpacing(spacing_4d)
+    itk_4d.SetOrigin(origin_4d)
+    itk_4d.SetDirection(direction_4d.flatten().tolist())
+
+    # Save
+    sitk.WriteImage(itk_4d, str(output_path))
+    logger.info(f"Successfully saved warped timeseries to {output_path}")
+
+
+def load_reference(reference_str: str, frames, dtype, device):
+    """Load reference image."""
+    if reference_str == 'first':
+        return frames[0]
+    elif reference_str.isdigit():
+        frame_idx = int(reference_str)
+        return frames[frame_idx]
+    else:
+        return Image.load_file(reference_str, dtype=dtype, device=device)
+
+
+def main():
+    args = parse_args()
+
+    # Parse dtype
+    dtype_map = {
+        'float32': torch.float32,
+        'float16': torch.float16,
+        'bfloat16': torch.bfloat16
+    }
+    dtype = dtype_map[args.dtype]
+
+    # Load timeseries
+    logger.info(f"Loading timeseries: {args.timeseries}")
+    timeseries_path = Path(args.timeseries)
+    if timeseries_path.is_dir():
+        frames = load_frame_directory(args.timeseries, dtype=dtype, device=args.device)
+    else:
+        frames = load_4d_nifti(args.timeseries, dtype=dtype, device=args.device)
+    logger.info(f"  Loaded {len(frames)} frames")
+
+    # Load reference
+    reference_image = load_reference(args.reference, frames, dtype, args.device)
+    logger.info(f"  Reference: {args.reference}")
+
+    # Load transforms
+    logger.info(f"Loading transforms: {args.transforms}")
+    transforms = load_transform_bundle(args.transforms, format='npz')
+    logger.info(f"  Loaded {len(transforms)} transforms")
+
+    # Validate
+    if len(transforms) != len(frames):
+        logger.warning(f"Transform count ({len(transforms)}) != frame count ({len(frames)})")
+        logger.warning(f"Will process {min(len(transforms), len(frames))} timepoints")
+        n_process = min(len(transforms), len(frames))
+        transforms = transforms[:n_process]
+        frames = frames[:n_process]
+
+    # Export individual warp files
+    export_individual_warps(frames, transforms, reference_image, args.output_dir)
+
+    # Create warped timeseries if requested
+    if args.export_warped:
+        create_warped_timeseries(
+            frames, transforms, reference_image,
+            args.export_warped, args.device, dtype
+        )
+
+    logger.info("\nExport complete!")
+    logger.info(f"  Individual warps: {args.output_dir}/")
+    if args.export_warped:
+        logger.info(f"  Warped timeseries: {args.export_warped}")
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        sys.exit(1)
