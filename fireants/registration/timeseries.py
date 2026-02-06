@@ -453,32 +453,28 @@ class TimeseriesRegistration:
         output_path = f"{self.output_prefix}_warped.nii.gz"
         logger.info(f"Saving warped 4D timeseries to {output_path}")
 
-        # Stack into 4D array
-        # Each volume is [D, H, W] (z, y, x from SimpleITK's GetArrayFromImage ordering)
-        # Stack along last axis: [D, H, W, T]
-        warped_4d = np.stack(self.warped_volumes, axis=-1)
-        logger.debug(f"Warped 4D shape before transpose: {warped_4d.shape}")
-
-        # SimpleITK expects [T, D, H, W] for 4D data (time, z, y, x)
-        # Transpose from [D, H, W, T] -> [T, D, H, W]
-        warped_4d_sitk = np.transpose(warped_4d, (3, 0, 1, 2))  # [z,y,x,T] -> [T,z,y,x]
-        logger.debug(f"Warped 4D shape after transpose: {warped_4d_sitk.shape}")
-
-        itk_4d = sitk.GetImageFromArray(warped_4d_sitk)
-
-        # Copy spatial metadata from reference
+        # Create list of 3D SimpleITK images for JoinSeries
+        # Each volume is [z, y, x] from FireANTs
         ref_itk = self.reference.itk_image
-        spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing (TR)
-        origin_4d = list(ref_itk.GetOrigin()) + [0.0]    # Add time origin
+        itk_3d_list = []
 
-        # Direction matrix: for 4D images (3D+time), use 3x3 for spatial dims only
-        # Time dimension doesn't have a direction component
-        direction_3d = ref_itk.GetDirection()  # Already flattened list of 9 elements
+        logger.debug(f"Converting {len(self.warped_volumes)} volumes to SimpleITK format...")
+        for vol in self.warped_volumes:
+            # Convert to SimpleITK 3D image
+            itk_3d = sitk.GetImageFromArray(vol)
+            # Copy metadata from reference
+            itk_3d.SetSpacing(ref_itk.GetSpacing())
+            itk_3d.SetOrigin(ref_itk.GetOrigin())
+            itk_3d.SetDirection(ref_itk.GetDirection())
+            itk_3d_list.append(itk_3d)
 
-        itk_4d.SetSpacing(spacing_4d)
-        itk_4d.SetOrigin(origin_4d)
-        itk_4d.SetDirection(direction_3d)  # Use 3x3 spatial direction matrix
+        # Join series to create true 4D image
+        logger.debug(f"Joining series to create 4D image...")
+        itk_4d = sitk.JoinSeries(itk_3d_list)
+        logger.debug(f"ITK 4D image size: {itk_4d.GetSize()}")
+        logger.debug(f"ITK 4D image dimensions: {itk_4d.GetDimension()}")
 
+        # JoinSeries automatically handles spatial metadata from the input 3D images
         # Save
         sitk.WriteImage(itk_4d, str(output_path))
         logger.info(f"Saved {len(self.warped_volumes)} warped volumes to {output_path}")

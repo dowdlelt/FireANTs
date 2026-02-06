@@ -70,16 +70,39 @@ def save_warp_as_nifti(warp_field: np.ndarray, reference_image: Image, output_pa
     """Save warp field as 4D NIfTI file (3 displacement components).
 
     Args:
-        warp_field: Displacement field [H, W, D, 3] in voxel coordinates
+        warp_field: Displacement field [z, y, x, 3] in voxel coordinates
         reference_image: Reference Image for spacing/direction/origin
         output_path: Output file path
     """
-    # Warp field is [H, W, D, 3], need to permute to [3, D, W, H] for SimpleITK
-    # SimpleITK uses [x, y, z] = [W, H, D] ordering
-    warp_field_sitk = np.transpose(warp_field, (3, 2, 1, 0))  # [3, D, W, H]
+    # Upsample warp to full resolution if needed
+    ref_shape = reference_image.itk_image.GetSize()  # [x, y, z] in SimpleITK
+    ref_shape_zyx = (ref_shape[2], ref_shape[1], ref_shape[0])  # [z, y, x]
+
+    if warp_field.shape[:3] != ref_shape_zyx:
+        logger.info(f"Upsampling warp from {warp_field.shape[:3]} to {ref_shape_zyx}")
+        # Warp is [z, y, x, 3] where 3 = [dx, dy, dz]
+        # Permute to [3, z, y, x] for interpolation
+        warp_torch = torch.from_numpy(warp_field).permute(3, 0, 1, 2).unsqueeze(0)  # [1, 3, z, y, x]
+        warp_upsampled = torch.nn.functional.interpolate(
+            warp_torch, size=ref_shape_zyx, mode='trilinear', align_corners=True
+        )
+        # Scale displacements proportionally
+        # Components are [dx, dy, dz] so scale by [x_scale, y_scale, z_scale]
+        scale_x = ref_shape_zyx[2] / warp_field.shape[2]  # x dimension
+        scale_y = ref_shape_zyx[1] / warp_field.shape[1]  # y dimension
+        scale_z = ref_shape_zyx[0] / warp_field.shape[0]  # z dimension
+        warp_upsampled[0, 0] *= scale_x  # dx
+        warp_upsampled[0, 1] *= scale_y  # dy
+        warp_upsampled[0, 2] *= scale_z  # dz
+        # Convert back to [z, y, x, 3]
+        warp_field = warp_upsampled[0].permute(1, 2, 3, 0).numpy()
+
+    # For isVector=True, SimpleITK expects the vector dimension to be LAST
+    # Warp field is already [z, y, x, 3], which is the correct format
+    # No transpose needed!
 
     # Create vector image
-    itk_warp = sitk.GetImageFromArray(warp_field_sitk, isVector=True)
+    itk_warp = sitk.GetImageFromArray(warp_field, isVector=True)
 
     # Copy metadata from reference
     itk_warp.SetSpacing(reference_image.itk_image.GetSpacing())
@@ -149,7 +172,7 @@ def create_warped_timeseries(frames, transforms, reference_image, output_path, d
 
     Args:
         frames: List of Image objects
-        transforms: List of warp field arrays [H, W, D, 3]
+        transforms: List of warp field arrays [z, y, x, 3]
         reference_image: Reference Image
         output_path: Output file path for 4D NIfTI
         device: Device to run on
@@ -158,44 +181,78 @@ def create_warped_timeseries(frames, transforms, reference_image, output_path, d
     logger.info(f"Creating warped timeseries: {output_path}")
     logger.info(f"  Warping {len(frames)} timepoints...")
 
+    # Get reference shape
+    ref_shape = reference_image.itk_image.GetSize()  # [x, y, z]
+    ref_shape_zyx = (ref_shape[2], ref_shape[1], ref_shape[0])  # [z, y, x]
+
     warped_volumes = []
 
     for i, (frame, warp_array) in enumerate(zip(frames, transforms)):
-        # Convert warp to torch tensor [1, H, W, D, 3]
-        warp_tensor = torch.from_numpy(warp_array).unsqueeze(0).to(dtype)
+        # Upsample warp to full resolution if needed
+        if warp_array.shape[:3] != ref_shape_zyx:
+            if i == 0:
+                logger.info(f"  Upsampling warps from {warp_array.shape[:3]} to {ref_shape_zyx}")
+            # Warp is [z, y, x, 3] where 3 = [dx, dy, dz]
+            # Permute to [3, z, y, x] for interpolation
+            warp_torch = torch.from_numpy(warp_array).permute(3, 0, 1, 2).unsqueeze(0).to(dtype)  # [1, 3, z, y, x]
+            warp_upsampled = torch.nn.functional.interpolate(
+                warp_torch, size=ref_shape_zyx, mode='trilinear', align_corners=True
+            )
+            # Scale displacements proportionally
+            # Components are [dx, dy, dz] so scale by [x_scale, y_scale, z_scale]
+            scale_x = ref_shape_zyx[2] / warp_array.shape[2]  # x dimension
+            scale_y = ref_shape_zyx[1] / warp_array.shape[1]  # y dimension
+            scale_z = ref_shape_zyx[0] / warp_array.shape[0]  # z dimension
+            warp_upsampled[0, 0] *= scale_x  # dx
+            warp_upsampled[0, 1] *= scale_y  # dy
+            warp_upsampled[0, 2] *= scale_z  # dz
+            # Convert to [1, z, y, x, 3] for fireants_interpolator
+            warp_tensor = warp_upsampled.permute(0, 2, 3, 4, 1)  # [1, 3, z, y, x] -> [1, z, y, x, 3]
+        else:
+            # Convert warp to torch tensor [1, z, y, x, 3]
+            warp_tensor = torch.from_numpy(warp_array).unsqueeze(0).to(dtype)
 
         # Apply warp
         warped = apply_warp_to_image(frame, warp_tensor, reference_image, device)
 
-        # Move to CPU and extract volume [H, W, D]
+        # Move to CPU and extract volume [z, y, x]
         warped_vol = warped[0, 0].cpu().numpy()  # Remove batch and channel dims
+
+        if i == 0:
+            logger.info(f"  Debug: warped tensor shape: {warped.shape}")
+            logger.info(f"  Debug: warped_vol shape: {warped_vol.shape}")
+            logger.info(f"  Debug: reference shape (x,y,z): {reference_image.itk_image.GetSize()}")
+
         warped_volumes.append(warped_vol)
 
         if (i + 1) % 50 == 0:
             logger.info(f"    Warped {i + 1}/{len(frames)} timepoints...")
 
-    # Stack into 4D array [H, W, D, T]
-    warped_4d = np.stack(warped_volumes, axis=-1)
+    # Create list of 3D SimpleITK images for JoinSeries
+    # Each volume is [z, y, x] from FireANTs
+    logger.info(f"  Converting {len(warped_volumes)} volumes to SimpleITK format...")
 
-    # Create 4D SimpleITK image
-    # SimpleITK expects [T, D, H, W] for 4D data
-    warped_4d_sitk = np.transpose(warped_4d, (3, 2, 0, 1))  # [H,W,D,T] -> [T,D,W,H]
-
-    itk_4d = sitk.GetImageFromArray(warped_4d_sitk)
-
-    # Copy spatial metadata from reference (3D)
     ref_itk = reference_image.itk_image
-    spacing_4d = list(ref_itk.GetSpacing()) + [1.0]  # Add time spacing
-    origin_4d = list(ref_itk.GetOrigin()) + [0.0]    # Add time origin
+    itk_3d_list = []
 
-    # Direction matrix for 4D (append identity for time dimension)
-    direction_3d = np.array(ref_itk.GetDirection()).reshape(3, 3)
-    direction_4d = np.eye(4)
-    direction_4d[:3, :3] = direction_3d
+    for vol in warped_volumes:
+        # Convert to SimpleITK 3D image
+        itk_3d = sitk.GetImageFromArray(vol)
+        # Copy metadata from reference
+        itk_3d.SetSpacing(ref_itk.GetSpacing())
+        itk_3d.SetOrigin(ref_itk.GetOrigin())
+        itk_3d.SetDirection(ref_itk.GetDirection())
+        itk_3d_list.append(itk_3d)
 
-    itk_4d.SetSpacing(spacing_4d)
-    itk_4d.SetOrigin(origin_4d)
-    itk_4d.SetDirection(direction_4d.flatten().tolist())
+    # Join series to create true 4D image
+    logger.info(f"  Joining series to create 4D image...")
+    itk_4d = sitk.JoinSeries(itk_3d_list)
+    logger.info(f"  Debug: ITK 4D image size: {itk_4d.GetSize()}")
+    logger.info(f"  Debug: ITK 4D image dimensions: {itk_4d.GetDimension()}")
+
+    # JoinSeries automatically handles spatial metadata from the input 3D images
+    # Just set the time spacing if desired (default is 1.0)
+    # Note: SimpleITK's JoinSeries already sets spacing, origin, and direction correctly
 
     # Save
     sitk.WriteImage(itk_4d, str(output_path))
