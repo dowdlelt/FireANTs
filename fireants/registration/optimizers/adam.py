@@ -78,6 +78,7 @@ class WarpAdam:
                  freeform=False,
                  offload=False,   # try offloading to CPU
                  reset=False,
+                 max_displacement=None,  # max allowed displacement magnitude (in voxels)
                  # distributed params
                  rank: int = 0, 
                  dim_to_shard: int = 0,
@@ -106,6 +107,7 @@ class WarpAdam:
         self.multiply_jacobian = multiply_jacobian
         self.reset = reset
         self.scaledown = scaledown   # if true, the scale the gradient even if norm is below 1
+        self.max_displacement = max_displacement  # max allowed displacement in voxels (None = unlimited)
         # offload params
         self.device = warp.device
         self.adam_update_kernel = adam_update_fused if self.device.type == 'cuda' else adam_update_fused_baseline
@@ -278,4 +280,12 @@ class WarpAdam:
             # smooth result if asked for
             if self.smoothing_gaussians is not None:
                 grad = self.smoothing_wrapper(grad, self.smoothing_gaussians, self.padding_smoothing)
+            # Clamp max displacement magnitude if specified
+            if self.max_displacement is not None:
+                with torch.no_grad():
+                    # Convert max_displacement from voxels to normalized coordinates
+                    max_disp_norm = self.max_displacement * self.half_resolution * 2.0
+                    disp_mag = grad.norm(p=2, dim=-1, keepdim=True)
+                    scale = torch.clamp(max_disp_norm / (disp_mag + self.eps), max=1.0)
+                    grad = grad * scale
             self.warp.data.copy_(grad)

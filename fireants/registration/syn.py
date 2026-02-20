@@ -107,6 +107,8 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                 init_affine: Optional[torch.Tensor] = None,
                 warp_reg: Optional[Union[Callable, nn.Module]] = None,
                 displacement_reg: Optional[Union[Callable, nn.Module]] = None,
+                max_displacement: Optional[float] = None,
+                warp_penalty: float = 0.0,
                 blur: bool = True,
                 custom_loss: nn.Module = None, **kwargs) -> None:
         # initialize abstract registration
@@ -121,23 +123,28 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
         # specify regularizations
         self.warp_reg = warp_reg
         self.displacement_reg = displacement_reg
+        self.warp_penalty = warp_penalty  # L2 penalty on displacement magnitude
 
+        # Pass max_displacement to optimizer params
+        opt_params = dict(optimizer_params)
+        if max_displacement is not None:
+            opt_params['max_displacement'] = max_displacement
 
         if deformation_type == 'geodesic':
             fwd_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
-                                        optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
+                                        optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params,
                                         smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation,
                                         fix_hook_accumulation=fix_hook_accumulation)
             rev_warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, dtype=self.dtype,
-                                        optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params,
+                                        optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params,
                                         smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation,
                                         fix_hook_accumulation=fix_hook_accumulation)
         elif deformation_type == 'compositive':
-            fwd_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
+            fwd_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params, \
                 dtype=self.dtype,
                                    smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation,
                                    fix_hook_accumulation=fix_hook_accumulation)
-            rev_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
+            rev_warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params, \
                 dtype=self.dtype,
                                    smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation,
                                    fix_hook_accumulation=fix_hook_accumulation)
@@ -437,6 +444,9 @@ class SyNRegistration(AbstractRegistration, DeformableMixin):
                     loss = loss + self.warp_reg(moved_coords) + self.warp_reg(fixed_coords)
                 if self.displacement_reg is not None:
                     loss = loss + self.displacement_reg(fwd_warp_field) + self.displacement_reg(rev_warp_field)
+                # L2 penalty on displacement magnitude (prevents unbounded warp growth)
+                if self.warp_penalty > 0:
+                    loss = loss + self.warp_penalty * (fwd_warp_field.pow(2).mean() + rev_warp_field.pow(2).mean())
                 # backward
                 loss.backward()
                 if self.progress_bar:

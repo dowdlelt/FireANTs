@@ -81,6 +81,11 @@ def parse_args():
     parser.add_argument('--no-fix-hook-accumulation', action='store_true', help='Disable fix for gradient hook accumulation bug (for comparison with buggy behavior)')
     parser.add_argument('--intensity-weighted-cc', type=float, nargs='?', const=1.0, default=None, metavar='SIGMA', help='Weight CC loss by smoothed intensity (sigma in voxels, default: 1.0 if flag used without value). Computes weights from smoothed midpoint images to emphasize brain tissue over background.')
     parser.add_argument('--normalize-image-intensities', action='store_true', help="Normalize image intensities to [0,1]")
+    parser.add_argument('--flat-convergence', action='store_true', help='Use flat convergence criterion (stops when |slope| < tolerance) instead of default (stops when slope > tolerance)')
+    parser.add_argument('--alt-gaussian', action='store_true', help='Use alternative Gaussian kernel with corrected sigma scaling (radius ≈ 3σ) and symmetric centering for CC/SCC losses')
+    parser.add_argument('--max-displacement', type=float, default=None, help='Maximum allowed displacement magnitude in voxels (clamps accumulated warp). Useful for preventing overshooting in deformable registration.')
+    parser.add_argument('--warp-penalty', type=float, default=0.0, help='L2 penalty weight on displacement field magnitude. Prevents unbounded warp growth. Try 0.001 as a starting value.')
+    parser.add_argument('--optimizer', type=str, default=None, choices=['Adam', 'SGD'], help='Optimizer for deformable registration. Adam (default) uses momentum; SGD matches ANTs behavior (no momentum).')
 
     # device args
     parser.add_argument('--device', type=str, default='cuda:0',
@@ -403,6 +408,15 @@ Optional Arguments:
     - 0.1x0.6x0.1: Scale X and Z deformations by 0.1, Y deformations by 0.6
     - 1x1x1: No restriction (default if not specified)
 
+--flat-convergence
+    Use standard convergence criterion: stops when loss flattens (|slope| < tolerance).
+    Default behavior: stops when loss increases (slope > tolerance).
+
+--alt-gaussian
+    Use alternative Gaussian kernel for CC/SCC losses with corrected sigma scaling and centering.
+    Fixes asymmetry and hard-edge artifacts in the default Gaussian kernel implementation.
+    Only affects registrations using Gaussian kernels (e.g., CC with kernel_type=gaussian).
+
 --verbose
     Enable verbose output
 
@@ -576,6 +590,16 @@ def main():
         merged_params = {**prev_transform_params, **transform_params, **metric_params}
         merged_params['tolerance'] = tolerance
         merged_params['max_tolerance_iters'] = window
+        merged_params['flat_convergence'] = args.flat_convergence
+        merged_params['alt_gaussian'] = args.alt_gaussian
+        # Only pass deformable-specific params for deformable transforms
+        if transform_type in ('SyN', 'Greedy'):
+            if args.max_displacement is not None:
+                merged_params['max_displacement'] = args.max_displacement
+            if args.warp_penalty > 0:
+                merged_params['warp_penalty'] = args.warp_penalty
+            if args.optimizer is not None:
+                merged_params['optimizer'] = args.optimizer
 
         # Initialize registration based on transform type
         if transform_type == 'Rigid':

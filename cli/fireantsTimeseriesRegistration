@@ -98,6 +98,16 @@ Examples:
                       help='Device to run on (default: cuda:0)')
     parser.add_argument('--dtype', type=str, default='float32', choices=['float32', 'float16', 'bfloat16'],
                       help='Data type for computation (default: float32)')
+    parser.add_argument('--flat-convergence', action='store_true',
+                      help='Use flat convergence criterion (stops when |slope| < tolerance) instead of default (stops when slope > tolerance)')
+    parser.add_argument('--alt-gaussian', action='store_true',
+                      help='Use alternative Gaussian kernel with corrected sigma scaling (radius ≈ 3σ) and symmetric centering for CC/SCC losses')
+    parser.add_argument('--max-displacement', type=float, default=None,
+                      help='Maximum allowed displacement magnitude in voxels (clamps accumulated warp)')
+    parser.add_argument('--warp-penalty', type=float, default=0.0,
+                      help='L2 penalty weight on displacement field magnitude. Try 0.001 as a starting value.')
+    parser.add_argument('--optimizer', type=str, default=None, choices=['Adam', 'SGD'],
+                      help='Optimizer for deformable registration. SGD matches ANTs behavior (no momentum).')
     parser.add_argument('--verbose', action='store_true',
                       help='Enable verbose logging')
 
@@ -252,9 +262,19 @@ def main():
             'iterations': iterations,
             'tolerance': tolerance,
             'max_tolerance_iters': window,
+            'flat_convergence': args.flat_convergence,
+            'alt_gaussian': args.alt_gaussian,
             **metric_params,
             **transform_params.get(transform_type, {})
         }
+        # Add deformable-specific params for SyN/Greedy
+        if transform_type in ('SyN', 'Greedy'):
+            if args.max_displacement is not None:
+                params['max_displacement'] = args.max_displacement
+            if args.warp_penalty > 0:
+                params['warp_penalty'] = args.warp_penalty
+            if args.optimizer is not None:
+                params['optimizer'] = args.optimizer
         registration_params[transform_type] = params
 
     # Log configuration

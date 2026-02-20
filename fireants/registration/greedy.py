@@ -102,6 +102,8 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 init_affine: Optional[torch.Tensor] = None,
                 warp_reg: Optional[Union[Callable, nn.Module]] = None,
                 displacement_reg: Optional[Union[Callable, nn.Module]] = None,
+                max_displacement: Optional[float] = None,
+                warp_penalty: float = 0.0,
                 blur: bool = True,
                 freeform: bool = False,
                 custom_loss: nn.Module = None, **kwargs) -> None:
@@ -118,6 +120,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         # specify regularizations
         self.warp_reg = warp_reg
         self.displacement_reg = displacement_reg
+        self.warp_penalty = warp_penalty
         self.deformation_type = deformation_type
         # specify deformation type
         if deformation_type == 'geodesic':
@@ -126,7 +129,10 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, dtype=self.dtype,
                                     smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation, fix_hook_accumulation=fix_hook_accumulation, init_scale=scales[0])
         elif deformation_type == 'compositive':
-            warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, \
+            opt_params = dict(optimizer_params)
+            if max_displacement is not None:
+                opt_params['max_displacement'] = max_displacement
+            warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params, \
                 dtype=self.dtype,
                 smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation, fix_hook_accumulation=fix_hook_accumulation, init_scale=scales[0], freeform=freeform)
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
@@ -326,6 +332,9 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                     # internally should use the fireants interpolator to avoid additional memory allocation
                     moved_coords = self.get_warped_coordinates(self.fixed_images, self.moving_images)
                     loss = loss + self.warp_reg(moved_coords)
+                # L2 penalty on displacement magnitude (prevents unbounded warp growth)
+                if self.warp_penalty > 0:
+                    loss = loss + self.warp_penalty * warp_field.pow(2).mean()
                 loss.backward()
                 if self.progress_bar:
                     pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))

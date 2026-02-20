@@ -95,6 +95,16 @@ class CompositiveWarp(nn.Module, AbstractDeformation):
         # add optimizer
         optimizer = optimizer.lower()
         if optimizer == 'sgd':
+            # Default SGD to scaledown=True (normalized gradient, constant step size).
+            # Unlike Adam whose moment-normalization naturally produces ~unit outputs,
+            # raw CC gradients in normalized coords are tiny (norm << 1). Without
+            # scaledown=True, the CFL clamp at half_resolution never activates and
+            # displacement = lr * raw_grad ≈ negligible. With scaledown=True,
+            # max displacement = half_resolution * lr per step, which is meaningful.
+            # SGD's lack of momentum provides natural stabilization near convergence
+            # (noisy gradient directions → compositional updates cancel).
+            if 'scaledown' not in oparams:
+                oparams['scaledown'] = True
             self.optimizer = WarpSGD(self.warp, lr=optimizer_lr, dtype=dtype, **oparams)
         elif optimizer == 'adam':
             self.optimizer = WarpAdam(self.warp, lr=optimizer_lr, dtype=dtype, **oparams)

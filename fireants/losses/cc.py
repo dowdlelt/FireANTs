@@ -86,6 +86,39 @@ def make_gaussian_kernel(kernel_size: int) -> torch.Tensor:
     )
     return kernel[:kernel_size]
 
+def make_gaussian_kernel_alt(kernel_size: int) -> torch.Tensor:
+    """Alternative Gaussian kernel with corrected sigma scaling and centering.
+    
+    Fixes two issues in the original implementation:
+    1. Asymmetry: Uses truncated=3.0 (in units of sigma) and centers the result
+    2. Sigma scaling: Sets sigma = radius/3 so radius ≈ 3σ (standard practice)
+    
+    Args:
+        kernel_size: Size of the kernel (must be odd)
+        
+    Returns:
+        Normalized 1D Gaussian kernel
+    """
+    if kernel_size % 2 == 0:
+        raise ValueError(f"kernel_size must be odd for Gaussian kernel, got {kernel_size}")
+    
+    # Sigma should be defined such that radius ≈ 3 standard deviations
+    radius = kernel_size // 2
+    sigma = torch.tensor(radius / 3.0)
+    
+    # Truncated is the number of sigmas, not pixels.
+    # tail = sigma * truncated = (radius/3) * 3 = radius
+    kernel = gaussian_1d(sigma=sigma, truncated=3.0, approx="sampled", normalize=False) * (
+        2.5066282 * sigma
+    )
+    
+    # Handle potential rounding errors in gaussian_1d tail calculation
+    if kernel.shape[0] > kernel_size:
+        start = (kernel.shape[0] - kernel_size) // 2
+        kernel = kernel[start : start + kernel_size]
+        
+    return kernel
+
 def _separable_filtering_conv(
     input_: torch.Tensor,
     kernels: List[torch.Tensor],
@@ -191,6 +224,7 @@ kernel_dict = {
     "rectangular": make_rectangular_kernel,
     "triangular": make_triangular_kernel,
     "gaussian": make_gaussian_kernel,
+    "gaussian_alt": make_gaussian_kernel_alt,
 }
 
 class LocalNormalizedCrossCorrelationLoss(nn.Module):
@@ -218,6 +252,7 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
         checkpointing: bool = False,
         intensity_weighting: bool = False,
         intensity_weight_sigma: float = 1.0,
+        alt_gaussian: bool = False,
     ) -> None:
         """
         Args:
@@ -239,6 +274,8 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
             intensity_weight_sigma: Gaussian smoothing sigma (in voxels) applied to images before computing
                 intensity weights. Only used when intensity_weighting=True. Smoothing reduces noise and allows
                 voxels near edges to contribute. Defaults to 1.0.
+            alt_gaussian: if True and kernel_type="gaussian", use alternative Gaussian kernel implementation
+                with corrected sigma scaling (radius ≈ 3σ) and symmetric centering. Defaults to False.
             split: do we want to split computation across 2 GPUs? (if pred and target are on different GPUs)
                 default: False (assumes they are on same device and big enough to fit on one GPU)
         """
@@ -265,7 +302,11 @@ class LocalNormalizedCrossCorrelationLoss(nn.Module):
                 raise ValueError(f"kernel_size[{i}] must be odd, got {ks}")
 
         # Create kernels for each dimension
-        _kernel_fn = kernel_dict[kernel_type]
+        # Use alternative Gaussian if requested and kernel_type is gaussian
+        if alt_gaussian and kernel_type == "gaussian":
+            _kernel_fn = kernel_dict["gaussian_alt"]
+        else:
+            _kernel_fn = kernel_dict[kernel_type]
         self.kernels = []
         for ks in self.kernel_sizes:
             kernel = _kernel_fn(ks)

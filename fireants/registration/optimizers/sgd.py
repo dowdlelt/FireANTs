@@ -32,6 +32,7 @@ class WarpSGD:
                  momentum=0, dampening=0, weight_decay=0, nesterov=False, scaledown=False, multiply_jacobian=False,
                  smoothing_gaussians=None, grad_gaussians=None,
                  freeform=False,
+                 max_displacement=None,  # max allowed displacement magnitude (in voxels)
                  # distributed params
                  rank: int = 0, 
                  dim_to_shard: int = 0,
@@ -62,6 +63,7 @@ class WarpSGD:
         self.nesterov = nesterov
         self.multiply_jacobian = multiply_jacobian
         self.scaledown = scaledown   # if true, the scale the gradient even if norm is below 1
+        self.max_displacement = max_displacement  # max allowed displacement in voxels (None = unlimited)
         self.velocity = torch.zeros_like(warp, dtype=dtype) if momentum > 0 else None
         self.permute_imgtov = (0, *range(2, self.n_dims+2), 1)  # [N, HWD, dims] -> [N, HWD, dims] -> [N, dims, HWD]
         self.permute_vtoimg = (0, self.n_dims+1, *range(1, self.n_dims+1))  # [N, dims, HWD] -> [N, HWD, dims]
@@ -151,23 +153,24 @@ class WarpSGD:
             else:
                 # grad = buf
                 grad.copy_(buf)
-        ## renormalize and update warp (per pixel)
-        gradmax = self.eps + grad.norm(p=2, dim=-1, keepdim=True)
-        # gradmean = gradmax.flatten(1).mean(1)  # [B,]
-        # gradmean = gradmean.reshape(-1, *([1])*(self.n_dims+1)).expand(*gradmax.shape)
-        # gradmax[gradmax < gradmean] = gradmean[gradmax < gradmean]
-
         ## renormalize and update warp
-        # gradmax = self.eps + grad.norm(p=2, dim=-1, keepdim=True).flatten(1).max(1).values
-        # gradmax = gradmax.reshape(-1, *([1])*(self.n_dims+1))
-        # if scaledown is "True", then we scale down even if the norm is below 1, otherwise we only divide the ones where the norm
-        # is greater than 1
-        if not self.scaledown:  
-            gradmax = torch.clamp(gradmax, min=1)
-        # grad = grad / gradmax * self.half_resolution   # norm is now 0.5r
-        grad.div_(gradmax).mul_(self.half_resolution)
-        # multiply by learning rate
-        grad.mul_(-self.lr)
+        if self.scaledown:
+            # Normalized mode: max displacement = half_resolution * lr (constant per step).
+            # Good for predictable step sizes but doesn't naturally decay near convergence.
+            gradmax = self.eps + grad.norm(p=2, dim=-1, keepdim=True).flatten(1).max(1).values
+            gradmax = gradmax.reshape(-1, *([1])*(self.n_dims+1))
+            grad.div_(gradmax).mul_(self.half_resolution)
+            grad.mul_(-self.lr)
+        else:
+            # ANTs-like mode: displacement = lr * gradient (natural decay as images align).
+            # The raw gradient shrinks as alignment improves, so the step size automatically
+            # decreases near convergence — matching ANTs behavior. A CFL safety clamp limits
+            # max per-step displacement to half_resolution (~0.5 voxels).
+            grad.mul_(-self.lr)
+            gradmax = self.eps + grad.norm(p=2, dim=-1, keepdim=True).flatten(1).max(1).values
+            gradmax = gradmax.reshape(-1, *([1])*(self.n_dims+1))
+            gradmax = torch.clamp(gradmax, min=self.half_resolution)
+            grad.div_(gradmax).mul_(self.half_resolution)
         # compositional update
         if self.freeform:
             grad.add_(self.warp.data)
@@ -176,5 +179,12 @@ class WarpSGD:
         # smooth result if asked for
         if self.smoothing_gaussians is not None:
             grad = self.smoothing_wrapper(grad, self.smoothing_gaussians, self.padding_smoothing)
+        # Clamp max displacement magnitude if specified
+        if self.max_displacement is not None:
+            with torch.no_grad():
+                max_disp_norm = self.max_displacement * self.half_resolution * 2.0
+                disp_mag = grad.norm(p=2, dim=-1, keepdim=True)
+                scale = torch.clamp(max_disp_norm / (disp_mag + self.eps), max=1.0)
+                grad = grad * scale
         self.warp.data.copy_(grad)
         pass

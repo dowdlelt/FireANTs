@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Rohit Jena. All rights reserved.
-# 
+#
 # This file is part of FireANTs, distributed under the terms of
 # the FireANTs License version 1.0. A copy of the license can be found
 # in the LICENSE file at the root of this repository.
@@ -7,10 +7,10 @@
 # IMPORTANT: This code is part of FireANTs and its use, reproduction, or
 # distribution must comply with the full license terms, including:
 # - Maintaining all copyright notices and bibliography references
-# - Using only approved (re)-distribution channels 
+# - Using only approved (re)-distribution channels
 # - Proper attribution in derivative works
 #
-# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE 
+# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE
 
 
 from typing import List, Tuple
@@ -28,21 +28,25 @@ import logging
 from typing import Optional
 from fireants.interpolator import fireants_interpolator
 import SimpleITK as sitk
+
 logging.basicConfig(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 def get_tensor_memory_details() -> List[Tuple[torch.Tensor, float, str, str]]:
     """Get details of all tensors currently in memory.
-    
+
     Returns:
         List of tuples containing (tensor, size_in_mb, tensor_description, variable_name)
     """
     tensor_details = []
     for obj in gc.get_objects():
         try:
-            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+            if torch.is_tensor(obj) or (
+                hasattr(obj, "data") and torch.is_tensor(obj.data)
+            ):
                 tensor = obj if torch.is_tensor(obj) else obj.data
                 size_mb = tensor.element_size() * tensor.nelement() / (1024 * 1024)
                 description = f"{tensor.shape} {tensor.dtype} {tensor.device}"
@@ -56,7 +60,7 @@ def get_tensor_memory_details() -> List[Tuple[torch.Tensor, float, str, str]]:
                             break
                     if var_name != "unknown":
                         break
-                
+
                 tensor_details.append((tensor, size_mb, description, var_name))
         except Exception as e:
             logger.warning(f"Error getting tensor details: {e}")
@@ -71,6 +75,7 @@ def get_gpu_memory(clear: bool = False):
         gc.collect()
     torch.cuda.synchronize()
     return torch.cuda.memory_allocated() / 1024 / 1024
+
 
 class ConvergenceMonitor:
     def __init__(self, N, slope, flat_convergence=False):
@@ -118,10 +123,10 @@ class ConvergenceMonitor:
 
     def converged(self, loss=None):
         """Check if convergence criteria is met.
-        
+
         If flat_convergence=True: Stops if loss stops changing (|slope| < threshold)
         If flat_convergence=False: Stops if loss increases (slope > threshold)
-        
+
         Optionally, update the monitor with a new loss value.
         """
         if loss is not None:
@@ -136,13 +141,14 @@ class ConvergenceMonitor:
             else:
                 # OLD: Stops if loss increases
                 return slope > self.slope
-    
+
     def reset(self):
         self.losses.clear()
 
 
 class catchtime:
-    ''' class to naively profile pieces of code '''
+    """class to naively profile pieces of code"""
+
     def __init__(self, str=None) -> None:
         self.str = str
 
@@ -152,21 +158,21 @@ class catchtime:
 
     def __exit__(self, type, value, traceback):
         self.time = perf_counter() - self.time
-        self.readout = f'{self.str}: Time: {self.time:.3f} seconds'
+        self.readout = f"{self.str}: Time: {self.time:.3f} seconds"
         print(self.readout)
 
 
 def _assert_check_scales_decreasing(scales: List[int]):
-    ''' Check if the list of scales is in decreasing order '''
-    for i in range(len(scales)-1):
-        if scales[i] <= scales[i+1]:
+    """Check if the list of scales is in decreasing order"""
+    for i in range(len(scales) - 1):
+        if scales[i] <= scales[i + 1]:
             raise ValueError("Scales must be in decreasing order")
 
 
 def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
-    ''' this backward hook will smooth out the gradient using the gaussians
+    """this backward hook will smooth out the gradient using the gaussians
     has to be called with a partial function
-    '''
+    """
     # grad is of shape [B, H, W, D, dims]
     if len(grad.shape) == 5:
         permute_vtoimg = (0, 4, 1, 2, 3)
@@ -174,11 +180,13 @@ def grad_smoothing_hook(grad: torch.Tensor, gaussians: List[torch.Tensor]):
     elif len(grad.shape) == 4:
         permute_vtoimg = (0, 3, 1, 2)
         permute_imgtov = (0, 2, 3, 1)
-    return separable_filtering(grad.permute(*permute_vtoimg), gaussians).permute(*permute_imgtov)
+    return separable_filtering(grad.permute(*permute_vtoimg), gaussians).permute(
+        *permute_imgtov
+    )
 
 
 def grad_restriction_hook(grad: torch.Tensor, restrict_factors: List[float]):
-    ''' this backward hook restricts gradients along specific dimensions
+    """this backward hook restricts gradients along specific dimensions
     by multiplying each dimension's gradient by a scaling factor
 
     Args:
@@ -190,12 +198,14 @@ def grad_restriction_hook(grad: torch.Tensor, restrict_factors: List[float]):
 
     Returns:
         modified gradient tensor with restricted deformations
-    '''
+    """
     # grad is of shape [B, H, W, D, dims] for 3D or [B, H, W, dims] for 2D
     # The last dimension contains the vector components (x, y, [z] displacements)
 
     # Convert restrict_factors to tensor on the same device as grad
-    restrict_tensor = torch.tensor(restrict_factors, dtype=grad.dtype, device=grad.device)
+    restrict_tensor = torch.tensor(
+        restrict_factors, dtype=grad.dtype, device=grad.device
+    )
 
     # Reshape restrict_tensor to broadcast correctly: [1, 1, 1, [1], dims]
     # This allows element-wise multiplication along the last dimension
@@ -209,10 +219,10 @@ def grad_restriction_hook(grad: torch.Tensor, restrict_factors: List[float]):
 
 
 def augment_filenames(filenames: List[str], batch_size: int, permitted_ext: List[str]):
-    '''
+    """
     If filenames is a single string, return a list of batch_size strings with the filename
     If filenames is a list of strings > 1, do nothing
-    '''
+    """
     # do nothing if batch_size == 1
     if batch_size == 1:
         return filenames
@@ -220,88 +230,113 @@ def augment_filenames(filenames: List[str], batch_size: int, permitted_ext: List
     if len(filenames) == 1:
         for ext in permitted_ext:
             if filenames[0].endswith(ext):
-                return [filenames[0].replace(ext, f"_{i}{ext}") for i in range(batch_size)]
+                return [
+                    filenames[0].replace(ext, f"_{i}{ext}") for i in range(batch_size)
+                ]
         raise ValueError(f"No permitted extension found in {filenames[0]}")
 
-    logger.warning(f"More than one filename provided, returning the same filename for all {batch_size} images")
+    logger.warning(
+        f"More than one filename provided, returning the same filename for all {batch_size} images"
+    )
     return filenames
 
+
 def check_correct_ext(filenames: List[str], permitted_ext: List[str]):
-    '''
+    """
     Check if the filenames have the correct extension
-    '''
+    """
     for filename in filenames:
         if not any(filename.endswith(ext) for ext in permitted_ext):
-            raise ValueError(f"File {filename} has an incorrect extension, must be one of {permitted_ext}")
+            raise ValueError(
+                f"File {filename} has an incorrect extension, must be one of {permitted_ext}"
+            )
     return True
 
+
 def any_extension(filename: str, permitted_ext: List[str]):
-    '''
+    """
     Check if the filename has any of the permitted extensions
-    '''
+    """
     return any(filename.endswith(ext) for ext in permitted_ext)
 
+
 def save_itk_affine(filename, param_dict):
-    '''
+    """
     Given parameter dict, save filename
-    '''
+    """
     keys = param_dict.keys()
     affinekey = None
     for k in keys:
-        if 'AffineTransform' in k:
+        if "AffineTransform" in k:
             affinekey = k
             break
     if affinekey is None:
         raise ValueError("Affine matrix not found in parameter dict")
-    dims = int(affinekey.split('_')[-1])
+    dims = int(affinekey.split("_")[-1])
     transform = sitk.AffineTransform(dims)
     # get affine and translation parts
     mat = param_dict[affinekey]
     A = mat[:dims, :dims]
     t = mat[:dims, -1]
-    # save 
+    # save
     transform.SetMatrix(A.flatten().astype(np.float64))
     transform.SetTranslation(t.flatten().astype(np.float64))
     if "fixed" in keys:
         transform.SetFixedParameters(param_dict["fixed"].flatten().astype(np.float64))
     sitk.WriteTransform(transform, filename)
 
+
 def savetxt(filename: str, A: torch.Tensor, t: torch.Tensor):
-    '''
+    """
     Save the transform matrix and translation vector to a text file
-    '''
+    """
     dims = t.flatten().shape[0]
-    with open(filename, 'w') as f:
+    with open(filename, "w") as f:
         f.write("#Insight Transform File V1.0\n")
         f.write("#Transform 0\n")
         f.write(f"Transform: AffineTransform_float_{dims}_{dims}\n")
-        f.write("Parameters: " + " ".join(map(str, list(A.flatten()) + list(t.flatten()))) + "\n")
-        f.write("FixedParameters: " + " ".join(map(str, np.zeros((dims, 1)).flatten())) + "\n")
+        f.write(
+            "Parameters: "
+            + " ".join(map(str, list(A.flatten()) + list(t.flatten())))
+            + "\n"
+        )
+        f.write(
+            "FixedParameters: "
+            + " ".join(map(str, np.zeros((dims, 1)).flatten()))
+            + "\n"
+        )
+
 
 # def compose_warp(warp1: torch.Tensor, warp2: torch.Tensor, grid: torch.Tensor):
-def compose_warp(warp1: torch.Tensor, warp2: torch.Tensor, affine: Optional[torch.Tensor] = None):
-    '''
+def compose_warp(
+    warp1: torch.Tensor, warp2: torch.Tensor, affine: Optional[torch.Tensor] = None
+):
+    """
     warp1 and warp2 are displacement maps u(x) and v(x) of size [N, H, W, D, dims]
 
     phi1(x) = x + u(x)
     phi2(x) = x + v(x)
     (phi1 \circ phi2 )(x) = phi1(x + v(x)) = x + v(x) + u(x + v(x))
-    '''
+    """
     if len(warp1.shape) == 5:
         permute_vtoimg = (0, 4, 1, 2, 3)
         permute_imgtov = (0, 2, 3, 4, 1)
     elif len(warp1.shape) == 4:
         permute_vtoimg = (0, 3, 1, 2)
         permute_imgtov = (0, 2, 3, 1)
-    # compute u(x + v(x)) 
-    warp12 = fireants_interpolator.warp_composer(warp1, affine, warp2, align_corners=True)
+    # compute u(x + v(x))
+    warp12 = fireants_interpolator.warp_composer(
+        warp1, affine, warp2, align_corners=True
+    )
     return warp2 + warp12
 
+
 def collate_fireants_fn(batch):
-    '''
-    collate batch of arbitrary lists/tuples/dicts with collating the Images into BatchedImages object 
-    '''
+    """
+    collate batch of arbitrary lists/tuples/dicts with collating the Images into BatchedImages object
+    """
     raise NotImplementedError
+
 
 def check_and_raise_cond(cond: bool, msg: str, error_type: Exception = ValueError):
     if not cond:

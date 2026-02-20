@@ -100,6 +100,8 @@ class AbstractRegistration(ABC):
                 cc_kernel_size: int = 3,
                 reduction: str = 'mean',
                 tolerance: float = 1e-6, max_tolerance_iters: int = 10,
+                flat_convergence: bool = False,
+                alt_gaussian: bool = False,
                 progress_bar: bool = True,
                 dtype: torch.dtype = torch.float32,
                 **kwargs
@@ -124,7 +126,8 @@ class AbstractRegistration(ABC):
         
         self.tolerance = tolerance
         self.max_tolerance_iters = max_tolerance_iters
-        self.convergence_monitor = ConvergenceMonitor(self.max_tolerance_iters, self.tolerance)
+        self.flat_convergence = flat_convergence
+        self.convergence_monitor = ConvergenceMonitor(self.max_tolerance_iters, self.tolerance, self.flat_convergence)
 
         self.device = fixed_images.device
         self.dtype = dtype
@@ -138,10 +141,12 @@ class AbstractRegistration(ABC):
             self.loss_fn = GlobalMutualInformationLoss(kernel_type=mi_kernel_type, reduction=reduction, **loss_params)
         elif loss_type == 'cc':
             self.loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
-                                                               kernel_size=cc_kernel_size, reduction=reduction, **loss_params)
+                                                               kernel_size=cc_kernel_size, reduction=reduction, 
+                                                               alt_gaussian=alt_gaussian, **loss_params)
         elif loss_type == 'scc':
             self.loss_fn = StretchedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
-                                                         kernel_size=cc_kernel_size, reduction=reduction, **loss_params)
+                                                         kernel_size=cc_kernel_size, reduction=reduction, 
+                                                         alt_gaussian=alt_gaussian, **loss_params)
         elif loss_type == 'fusedcc':
             from fireants.losses.fusedcc import FusedLocalNormalizedCrossCorrelationLoss
             self.loss_fn = FusedLocalNormalizedCrossCorrelationLoss(spatial_dims=self.dims, 
