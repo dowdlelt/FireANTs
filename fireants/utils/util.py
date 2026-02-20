@@ -73,15 +73,19 @@ def get_gpu_memory(clear: bool = False):
     return torch.cuda.memory_allocated() / 1024 / 1024
 
 class ConvergenceMonitor:
-    def __init__(self, N, slope):
+    def __init__(self, N, slope, flat_convergence=False):
         """
         Initialize the ConvergenceMonitor class.
         Args:
         - N: number of values to keep track of.
+        - slope: threshold for slope-based convergence.
+        - flat_convergence: if True, converge when |slope| < threshold (flat).
+                           if False, converge when slope > threshold (increasing).
         """
         self.N = N
         self.losses = deque(maxlen=N)
         self.slope = slope
+        self.flat_convergence = flat_convergence
 
     def update(self, loss):
         """Append a new loss value to the monitor."""
@@ -113,8 +117,12 @@ class ConvergenceMonitor:
         return slope
 
     def converged(self, loss=None):
-        """Check if the loss has increased (i.e., slope > threshold).
-        optionally, update the monitor with a new loss value.
+        """Check if convergence criteria is met.
+        
+        If flat_convergence=True: Stops if loss stops changing (|slope| < threshold)
+        If flat_convergence=False: Stops if loss increases (slope > threshold)
+        
+        Optionally, update the monitor with a new loss value.
         """
         if loss is not None:
             self.update(loss)
@@ -122,7 +130,12 @@ class ConvergenceMonitor:
             return False
         else:
             slope = self._compute_slope()
-            return slope > self.slope
+            if self.flat_convergence:
+                # NEW: Stops if loss stops changing (Standard Convergence)
+                return abs(slope) < self.slope
+            else:
+                # OLD: Stops if loss increases
+                return slope > self.slope
     
     def reset(self):
         self.losses.clear()
