@@ -29,15 +29,17 @@ import torch
 from fireants.io.timeseries import load_4d_nifti, load_frame_directory
 from fireants.registration.timeseries import TimeseriesRegistration
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='FireANTs Timeseries Registration - Ultra-fast 4D volume registration',
+        description="FireANTs Timeseries Registration - Ultra-fast 4D volume registration",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   # Basic: Register 4D volume to first frame with Greedy
   fireantsTimeseriesRegistration \\
@@ -64,52 +66,119 @@ Examples:
     --output output/rigid \\
     --transform Rigid \\
     --chunk-size 5
-        '''
+        """,
     )
 
     # Input/output
-    parser.add_argument('--timeseries', type=str, required=True,
-                      help='Path to 4D NIfTI file OR directory of 3D volumes')
-    parser.add_argument('--output', type=str, required=True,
-                      help='Output prefix for results (e.g., output/timeseries)')
-    parser.add_argument('--reference', type=str, default='first',
-                      help='Reference for registration: "first" (default), frame index (e.g., "10"), or path to external template')
+    parser.add_argument(
+        "--timeseries",
+        type=str,
+        required=True,
+        help="Path to 4D NIfTI file OR directory of 3D volumes",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=True,
+        help="Output prefix for results (e.g., output/timeseries)",
+    )
+    parser.add_argument(
+        "--reference",
+        type=str,
+        default="first",
+        help='Reference for registration: "first" (default), frame index (e.g., "10"), or path to external template',
+    )
 
     # Registration configuration
-    parser.add_argument('--transform', type=str, required=True,
-                      help='Transform type(s): Rigid, Affine, Greedy, SyN. Chain with + (e.g., Rigid+SyN[0.1])')
-    parser.add_argument('--metric', type=str, default='CC[5]',
-                      help='Similarity metric: CC[kernel_size], MI[num_bins], etc. Can specify weights with : (e.g., CC[5]:0.7)')
-    parser.add_argument('--convergence', type=str, default='[100x50x25,1e-6,10]',
-                      help='Convergence: [iterations,tolerance,window] (e.g., [100x50x25,1e-6,10])')
-    parser.add_argument('--shrink-factors', type=str, default='4x2x1',
-                      help='Multi-resolution shrink factors (e.g., 4x2x1)')
+    parser.add_argument(
+        "--transform",
+        type=str,
+        required=True,
+        help="Transform type(s): Rigid, Affine, Greedy, SyN. Chain with + (e.g., Rigid+SyN[0.1])",
+    )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default="CC[5]",
+        help="Similarity metric: CC[kernel_size], MI[num_bins], etc. Can specify weights with : (e.g., CC[5]:0.7)",
+    )
+    parser.add_argument(
+        "--convergence",
+        type=str,
+        default="[100x50x25,1e-6,10]",
+        help="Convergence: [iterations,tolerance,window] (e.g., [100x50x25,1e-6,10])",
+    )
+    parser.add_argument(
+        "--shrink-factors",
+        type=str,
+        default="4x2x1",
+        help="Multi-resolution shrink factors (e.g., 4x2x1)",
+    )
 
     # Timeseries-specific options
-    parser.add_argument('--mode', type=str, default='parallel', choices=['parallel', 'sequential'],
-                      help='Registration mode: parallel (all→ref, default) or sequential (0→1→2...)')
-    parser.add_argument('--chunk-size', type=int, default=None,
-                      help='Frames per batch (default: auto-detect from GPU memory)')
-    parser.add_argument('--save-warped', action='store_true',
-                      help='Save warped timeseries during registration (applies warps immediately while on GPU for efficiency)')
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="parallel",
+        choices=["parallel", "sequential"],
+        help="Registration mode: parallel (all→ref, default) or sequential (0→1→2...)",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Frames per batch (default: auto-detect from GPU memory)",
+    )
+    parser.add_argument(
+        "--save-warped",
+        action="store_true",
+        help="Save warped timeseries during registration (applies warps immediately while on GPU for efficiency)",
+    )
 
     # Device and performance
-    parser.add_argument('--device', type=str, default='cuda:0',
-                      help='Device to run on (default: cuda:0)')
-    parser.add_argument('--dtype', type=str, default='float32', choices=['float32', 'float16', 'bfloat16'],
-                      help='Data type for computation (default: float32)')
-    parser.add_argument('--flat-convergence', action='store_true',
-                      help='Use flat convergence criterion (stops when |slope| < tolerance) instead of default (stops when slope > tolerance)')
-    parser.add_argument('--alt-gaussian', action='store_true',
-                      help='Use alternative Gaussian kernel with corrected sigma scaling (radius ≈ 3σ) and symmetric centering for CC/SCC losses')
-    parser.add_argument('--max-displacement', type=float, default=None,
-                      help='Maximum allowed displacement magnitude in voxels (clamps accumulated warp)')
-    parser.add_argument('--warp-penalty', type=float, default=0.0,
-                      help='L2 penalty weight on displacement field magnitude. Try 0.001 as a starting value.')
-    parser.add_argument('--optimizer', type=str, default=None, choices=['Adam', 'SGD'],
-                      help='Optimizer for deformable registration. SGD matches ANTs behavior (no momentum).')
-    parser.add_argument('--verbose', action='store_true',
-                      help='Enable verbose logging')
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="Device to run on (default: cuda:0)",
+    )
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float16", "bfloat16"],
+        help="Data type for computation (default: float32)",
+    )
+    parser.add_argument(
+        "--flat-convergence",
+        action="store_true",
+        help="Use flat convergence criterion (stops when |slope| < tolerance) instead of default (stops when slope > tolerance)",
+    )
+    parser.add_argument(
+        "--alt-gaussian",
+        action="store_true",
+        help="Use alternative Gaussian kernel with corrected sigma scaling (radius ≈ 3σ) and symmetric centering for CC/SCC losses",
+    )
+    parser.add_argument(
+        "--max-displacement",
+        type=float,
+        default=None,
+        help="Maximum allowed displacement magnitude in voxels (clamps accumulated warp)",
+    )
+    parser.add_argument(
+        "--warp-penalty",
+        type=float,
+        default=0.0,
+        help="L2 penalty weight on displacement field magnitude. Try 0.001 as a starting value.",
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default=None,
+        choices=["Adam", "SGD"],
+        help="Optimizer for deformable registration. SGD matches ANTs behavior (no momentum).",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     return parser.parse_args()
 
@@ -120,19 +189,19 @@ def parse_transform(transform_str: str):
     params_dict = {}
 
     # Split by + for chained transforms
-    for part in transform_str.split('+'):
-        if '[' in part:
-            transform_type = part.split('[')[0]
-            params_str = part.split('[')[1].rstrip(']')
+    for part in transform_str.split("+"):
+        if "[" in part:
+            transform_type = part.split("[")[0]
+            params_str = part.split("[")[1].rstrip("]")
 
             # Parse parameters
             params = {}
-            for param in params_str.split(','):
-                if '=' in param:
-                    key, val = param.split('=')
+            for param in params_str.split(","):
+                if "=" in param:
+                    key, val = param.split("=")
                     # Special handling for restrict_deformation: parse "0.1x1x0.1" to list
-                    if key == 'restrict_deformation' and 'x' in val:
-                        params[key] = [float(x) for x in val.split('x')]
+                    if key == "restrict_deformation" and "x" in val:
+                        params[key] = [float(x) for x in val.split("x")]
                     else:
                         try:
                             params[key] = float(val)
@@ -140,8 +209,8 @@ def parse_transform(transform_str: str):
                             params[key] = val
                 else:
                     # First parameter without key is smooth_warp_sigma for Greedy/SyN
-                    if transform_type in ['Greedy', 'SyN']:
-                        params['smooth_warp_sigma'] = float(param)
+                    if transform_type in ["Greedy", "SyN"]:
+                        params["smooth_warp_sigma"] = float(param)
 
             params_dict[transform_type] = params
         else:
@@ -156,25 +225,27 @@ def parse_metric(metric_str: str):
     """Parse metric string like 'CC[5]' or 'MI[32]:0.7'"""
     # Extract weight if present
     weight = 1.0
-    if ':' in metric_str:
-        metric_str, weight_str = metric_str.rsplit(':', 1)
+    if ":" in metric_str:
+        metric_str, weight_str = metric_str.rsplit(":", 1)
         weight = float(weight_str)
 
     # Parse metric type and parameters
-    metric_type = metric_str.split('[')[0]
-    params_str = metric_str.split('[')[1].rstrip(']')
-    params = [p.strip() for p in params_str.split(',')]
+    metric_type = metric_str.split("[")[0]
+    params_str = metric_str.split("[")[1].rstrip("]")
+    params = [p.strip() for p in params_str.split(",")]
 
-    metric_params = {'weight': weight}
+    metric_params = {"weight": weight}
 
-    if metric_type in ['CC', 'Correlation']:
-        metric_params['loss_type'] = 'cc'
-        metric_params['cc_kernel_size'] = int(params[0]) if params else 5
-    elif metric_type in ['MI', 'MutualInformation']:
-        metric_params['loss_type'] = 'mi'
-        metric_params['loss_params'] = {'num_bins': int(params[0])} if params else {'num_bins': 32}
-    elif metric_type in ['MSE', 'MeanSquares']:
-        metric_params['loss_type'] = 'mse'
+    if metric_type in ["CC", "Correlation"]:
+        metric_params["loss_type"] = "cc"
+        metric_params["cc_kernel_size"] = int(params[0]) if params else 5
+    elif metric_type in ["MI", "MutualInformation"]:
+        metric_params["loss_type"] = "mi"
+        metric_params["loss_params"] = (
+            {"num_bins": int(params[0])} if params else {"num_bins": 32}
+        )
+    elif metric_type in ["MSE", "MeanSquares"]:
+        metric_params["loss_type"] = "mse"
     else:
         raise ValueError(f"Unsupported metric type: {metric_type}")
 
@@ -183,10 +254,10 @@ def parse_metric(metric_str: str):
 
 def parse_convergence(conv_str: str):
     """Parse convergence string like '[100x50x25,1e-6,10]'"""
-    conv_str = conv_str.strip('[]')
-    parts = [p.strip() for p in conv_str.split(',')]
+    conv_str = conv_str.strip("[]")
+    parts = [p.strip() for p in conv_str.split(",")]
 
-    iterations = [int(x) for x in parts[0].split('x')]
+    iterations = [int(x) for x in parts[0].split("x")]
     tolerance = float(parts[1]) if len(parts) > 1 else 1e-6
     window = int(parts[2]) if len(parts) > 2 else 10
 
@@ -200,7 +271,7 @@ def load_timeseries(timeseries_path: str, dtype: torch.dtype, device: str):
     if path.is_dir():
         logger.info(f"Loading timeseries from directory: {timeseries_path}")
         frames = load_frame_directory(timeseries_path, dtype=dtype, device=device)
-    elif path.suffix in ['.nii', '.gz']:
+    elif path.suffix in [".nii", ".gz"]:
         logger.info(f"Loading 4D NIfTI file: {timeseries_path}")
         frames = load_4d_nifti(timeseries_path, dtype=dtype, device=device)
     else:
@@ -211,18 +282,21 @@ def load_timeseries(timeseries_path: str, dtype: torch.dtype, device: str):
 
 def load_reference(reference_str: str, frames, dtype: torch.dtype, device: str):
     """Load reference image based on specification."""
-    if reference_str == 'first':
+    if reference_str == "first":
         logger.info("Using first frame as reference")
         return frames[0]
     elif reference_str.isdigit():
         frame_idx = int(reference_str)
         if frame_idx >= len(frames):
-            raise ValueError(f"Reference frame index {frame_idx} out of range (have {len(frames)} frames)")
+            raise ValueError(
+                f"Reference frame index {frame_idx} out of range (have {len(frames)} frames)"
+            )
         logger.info(f"Using frame {frame_idx} as reference")
         return frames[frame_idx]
     else:
         # External template file
         from fireants.io.image import Image
+
         logger.info(f"Loading external reference: {reference_str}")
         return Image.load_file(reference_str, dtype=dtype, device=device)
 
@@ -235,9 +309,9 @@ def main():
 
     # Parse dtype
     dtype_map = {
-        'float32': torch.float32,
-        'float16': torch.float16,
-        'bfloat16': torch.bfloat16
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
     }
     dtype = dtype_map[args.dtype]
 
@@ -252,29 +326,29 @@ def main():
     transform_types, transform_params = parse_transform(args.transform)
     metric_params = parse_metric(args.metric)
     iterations, tolerance, window = parse_convergence(args.convergence)
-    shrink_factors = [float(x) for x in args.shrink_factors.split('x')]
+    shrink_factors = [float(x) for x in args.shrink_factors.split("x")]
 
     # Build registration parameters for each transform type
     registration_params = {}
     for transform_type in transform_types:
         params = {
-            'scales': shrink_factors,
-            'iterations': iterations,
-            'tolerance': tolerance,
-            'max_tolerance_iters': window,
-            'flat_convergence': args.flat_convergence,
-            'alt_gaussian': args.alt_gaussian,
+            "scales": shrink_factors,
+            "iterations": iterations,
+            "tolerance": tolerance,
+            "max_tolerance_iters": window,
+            "flat_convergence": args.flat_convergence,
+            "alt_gaussian": args.alt_gaussian,
             **metric_params,
-            **transform_params.get(transform_type, {})
+            **transform_params.get(transform_type, {}),
         }
         # Add deformable-specific params for SyN/Greedy
-        if transform_type in ('SyN', 'Greedy'):
+        if transform_type in ("SyN", "Greedy"):
             if args.max_displacement is not None:
-                params['max_displacement'] = args.max_displacement
+                params["max_displacement"] = args.max_displacement
             if args.warp_penalty > 0:
-                params['warp_penalty'] = args.warp_penalty
+                params["warp_penalty"] = args.warp_penalty
             if args.optimizer is not None:
-                params['optimizer'] = args.optimizer
+                params["optimizer"] = args.optimizer
         registration_params[transform_type] = params
 
     # Log configuration
@@ -297,26 +371,26 @@ def main():
         output_prefix=args.output,
         device=args.device,
         progress_bar=not args.verbose,
-        save_warped_timeseries=args.save_warped
+        save_warped_timeseries=args.save_warped,
     )
 
     # Run registration
-    logger.info("\n" + "="*80)
+    logger.info("\n" + "=" * 80)
     logger.info("Starting timeseries registration...")
-    logger.info("="*80 + "\n")
+    logger.info("=" * 80 + "\n")
 
     results = ts_reg.register()
 
     # Report results
-    logger.info("\n" + "="*80)
+    logger.info("\n" + "=" * 80)
     logger.info("Timeseries registration completed successfully!")
-    logger.info("="*80)
+    logger.info("=" * 80)
     for transform_type, transforms in results.items():
         logger.info(f"  {transform_type}: {len(transforms)} transforms saved")
 
     # Create summary file
     summary_path = f"{args.output}_summary.txt"
-    with open(summary_path, 'w') as f:
+    with open(summary_path, "w") as f:
         f.write("FireANTs Timeseries Registration Summary\n")
         f.write("=" * 80 + "\n\n")
         f.write(f"Input: {args.timeseries}\n")
@@ -338,7 +412,7 @@ def main():
     logger.info("Done!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         main()
     except Exception as e:

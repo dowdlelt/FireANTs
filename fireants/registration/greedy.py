@@ -33,11 +33,13 @@ from fireants.utils.warputils import compositive_warp_inverse
 from fireants.interpolator import fireants_interpolator
 
 import logging
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 ## Deformable utils
 from fireants.registration.deformablemixin import DeformableMixin
+
 
 class GreedyRegistration(AbstractRegistration, DeformableMixin):
     """Greedy deformable registration class for non-linear image alignment.
@@ -83,37 +85,58 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         smooth_warp_sigma (float): Smoothing sigma for warp field
 
     """
-    def __init__(self, scales: List[int], iterations: List[float],
-                fixed_images: BatchedImages, moving_images: BatchedImages,
-                loss_type: str = "cc",
-                deformation_type: str = 'compositive',
-                optimizer: str = 'Adam', optimizer_params: dict = {},
-                optimizer_lr: float = 0.5,
-                integrator_n: Union[str, int] = 7,
-                mi_kernel_type: str = 'gaussian', cc_kernel_type: str = 'rectangular',
-                cc_kernel_size: int = 7,
-                smooth_warp_sigma: float = 0.5,
-                smooth_grad_sigma: float = 1.0,
-                restrict_deformation: Optional[List[float]] = None,
-                fix_hook_accumulation: bool = True,
-                loss_params: dict = {},
-                reduction: str = 'mean',
-                tolerance: float = 1e-6, max_tolerance_iters: int = 10,
-                init_affine: Optional[torch.Tensor] = None,
-                warp_reg: Optional[Union[Callable, nn.Module]] = None,
-                displacement_reg: Optional[Union[Callable, nn.Module]] = None,
-                max_displacement: Optional[float] = None,
-                warp_penalty: float = 0.0,
-                blur: bool = True,
-                freeform: bool = False,
-                custom_loss: nn.Module = None, **kwargs) -> None:
+
+    def __init__(
+        self,
+        scales: List[int],
+        iterations: List[float],
+        fixed_images: BatchedImages,
+        moving_images: BatchedImages,
+        loss_type: str = "cc",
+        deformation_type: str = "compositive",
+        optimizer: str = "Adam",
+        optimizer_params: dict = {},
+        optimizer_lr: float = 0.5,
+        integrator_n: Union[str, int] = 7,
+        mi_kernel_type: str = "gaussian",
+        cc_kernel_type: str = "rectangular",
+        cc_kernel_size: int = 7,
+        smooth_warp_sigma: float = 0.5,
+        smooth_grad_sigma: float = 1.0,
+        restrict_deformation: Optional[List[float]] = None,
+        fix_hook_accumulation: bool = True,
+        loss_params: dict = {},
+        reduction: str = "mean",
+        tolerance: float = 1e-6,
+        max_tolerance_iters: int = 10,
+        init_affine: Optional[torch.Tensor] = None,
+        warp_reg: Optional[Union[Callable, nn.Module]] = None,
+        displacement_reg: Optional[Union[Callable, nn.Module]] = None,
+        max_displacement: Optional[float] = None,
+        warp_penalty: float = 0.0,
+        blur: bool = True,
+        freeform: bool = False,
+        custom_loss: nn.Module = None,
+        **kwargs,
+    ) -> None:
         # initialize abstract registration
         # nn.Module.__init__(self)
-        super().__init__(scales=scales, iterations=iterations, fixed_images=fixed_images, moving_images=moving_images,
-                         loss_type=loss_type, mi_kernel_type=mi_kernel_type, cc_kernel_type=cc_kernel_type, custom_loss=custom_loss,
-                         loss_params=loss_params,
-                         cc_kernel_size=cc_kernel_size, reduction=reduction,
-                         tolerance=tolerance, max_tolerance_iters=max_tolerance_iters, **kwargs)
+        super().__init__(
+            scales=scales,
+            iterations=iterations,
+            fixed_images=fixed_images,
+            moving_images=moving_images,
+            loss_type=loss_type,
+            mi_kernel_type=mi_kernel_type,
+            cc_kernel_type=cc_kernel_type,
+            custom_loss=custom_loss,
+            loss_params=loss_params,
+            cc_kernel_size=cc_kernel_size,
+            reduction=reduction,
+            tolerance=tolerance,
+            max_tolerance_iters=max_tolerance_iters,
+            **kwargs,
+        )
         self.dims = fixed_images.dims
         self.blur = blur
         self.reduction = reduction
@@ -123,69 +146,117 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         self.warp_penalty = warp_penalty
         self.deformation_type = deformation_type
         # specify deformation type
-        if deformation_type == 'geodesic':
+        if deformation_type == "geodesic":
             logger.warn(f"Use compositive deformation for better performance")
-            logger.info(f"Using geodesic deformation with {integrator_n} integration steps")
-            warp = StationaryVelocity(fixed_images, moving_images, integrator_n=integrator_n, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=optimizer_params, dtype=self.dtype,
-                                    smoothing_grad_sigma=smooth_grad_sigma, restrict_deformation=restrict_deformation, fix_hook_accumulation=fix_hook_accumulation, init_scale=scales[0])
-        elif deformation_type == 'compositive':
+            logger.info(
+                f"Using geodesic deformation with {integrator_n} integration steps"
+            )
+            warp = StationaryVelocity(
+                fixed_images,
+                moving_images,
+                integrator_n=integrator_n,
+                optimizer=optimizer,
+                optimizer_lr=optimizer_lr,
+                optimizer_params=optimizer_params,
+                dtype=self.dtype,
+                smoothing_grad_sigma=smooth_grad_sigma,
+                restrict_deformation=restrict_deformation,
+                fix_hook_accumulation=fix_hook_accumulation,
+                init_scale=scales[0],
+            )
+        elif deformation_type == "compositive":
             opt_params = dict(optimizer_params)
             if max_displacement is not None:
-                opt_params['max_displacement'] = max_displacement
-            warp = CompositiveWarp(fixed_images, moving_images, optimizer=optimizer, optimizer_lr=optimizer_lr, optimizer_params=opt_params, \
+                opt_params["max_displacement"] = max_displacement
+            warp = CompositiveWarp(
+                fixed_images,
+                moving_images,
+                optimizer=optimizer,
+                optimizer_lr=optimizer_lr,
+                optimizer_params=opt_params,
                 dtype=self.dtype,
-                smoothing_grad_sigma=smooth_grad_sigma, smoothing_warp_sigma=smooth_warp_sigma, restrict_deformation=restrict_deformation, fix_hook_accumulation=fix_hook_accumulation, init_scale=scales[0], freeform=freeform)
+                smoothing_grad_sigma=smooth_grad_sigma,
+                smoothing_warp_sigma=smooth_warp_sigma,
+                restrict_deformation=restrict_deformation,
+                fix_hook_accumulation=fix_hook_accumulation,
+                init_scale=scales[0],
+                freeform=freeform,
+            )
             smooth_warp_sigma = 0  # this work is delegated to compositive warp
         else:
-            raise ValueError('Invalid deformation type: {}'.format(deformation_type))
+            raise ValueError("Invalid deformation type: {}".format(deformation_type))
         self.warp = warp
-        self.smooth_warp_sigma = smooth_warp_sigma   # in voxels
+        self.smooth_warp_sigma = smooth_warp_sigma  # in voxels
         # initialize affine
         if init_affine is None:
-            init_affine = torch.eye(self.dims+1, device=fixed_images.device).unsqueeze(0).repeat(self.opt_size, 1, 1)  # [N, D+1, D+1]
+            init_affine = (
+                torch.eye(self.dims + 1, device=fixed_images.device)
+                .unsqueeze(0)
+                .repeat(self.opt_size, 1, 1)
+            )  # [N, D+1, D+1]
         B, D1, D2 = init_affine.shape
         # affine can be [N, D, D+1] or [N, D+1, D+1]
-        if D1 == self.dims+1 and D2 == self.dims+1:
+        if D1 == self.dims + 1 and D2 == self.dims + 1:
             self.affine = init_affine.detach().to(self.dtype)
-        elif D1 == self.dims and D2 == self.dims+1:
+        elif D1 == self.dims and D2 == self.dims + 1:
             # attach row to affine
-            row = torch.zeros(self.opt_size, 1, self.dims+1, device=fixed_images.device)
+            row = torch.zeros(
+                self.opt_size, 1, self.dims + 1, device=fixed_images.device
+            )
             row[:, 0, -1] = 1.0
             self.affine = torch.cat([init_affine.detach(), row], dim=1).to(self.dtype)
         else:
-            raise ValueError('Invalid initial affine shape: {}'.format(init_affine.shape))
+            raise ValueError(
+                "Invalid initial affine shape: {}".format(init_affine.shape)
+            )
         # make it contiguous
         self.affine = self.affine.contiguous()
 
-    def get_inverse_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], \
-                                             moving_images: Union[BatchedImages, FakeBatchedImages], \
-                                             smooth_warp_sigma: float = 0, smooth_grad_sigma: float = 0,
-                                             use_moving_shape=True,
-                                             shape=None, displacement=False):
-        ''' Get inverse warped coordinates for the moving image.
+    def get_inverse_warp_parameters(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        smooth_warp_sigma: float = 0,
+        smooth_grad_sigma: float = 0,
+        use_moving_shape=True,
+        shape=None,
+        displacement=False,
+    ):
+        """Get inverse warped coordinates for the moving image.
 
         This method is useful to analyse the effect of how the moving coordinates (fixed images) are transformed
 
         the warp can either be of `fixed_shape` or `moving_shape` depending on what kind of coordinates we want (determined by `use_moving_shape`)
 
-        '''
+        """
         moving_arrays = moving_images()
         if shape is None:
             shape = moving_images.shape if use_moving_shape else fixed_images.shape
         else:
-            shape = [moving_arrays.shape[0], 1] + list(shape) if use_moving_shape else [fixed_arrays.shape[0], 1] + list(shape)
+            shape = (
+                [moving_arrays.shape[0], 1] + list(shape)
+                if use_moving_shape
+                else [fixed_arrays.shape[0], 1] + list(shape)
+            )
 
         warp = self.warp.get_warp().detach().clone()
         # Pass restrict_deformation if it exists
-        restrict_deform = getattr(self.warp, 'restrict_deformation', None)
-        warp_inv = compositive_warp_inverse(moving_images if use_moving_shape else fixed_images, warp,
-                                           displacement=True,
-                                           restrict_deformation=restrict_deform)
+        restrict_deform = getattr(self.warp, "restrict_deformation", None)
+        warp_inv = compositive_warp_inverse(
+            moving_images if use_moving_shape else fixed_images,
+            warp,
+            displacement=True,
+            restrict_deformation=restrict_deform,
+        )
         # resample if needed
         mode = "bilinear" if self.dims == 2 else "trilinear"
         if tuple(warp_inv.shape[1:-1]) != tuple(shape[2:]):
-            warp_inv = F.interpolate(warp_inv.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
-
+            warp_inv = F.interpolate(
+                warp_inv.permute(*self.warp.permute_vtoimg),
+                size=shape[2:],
+                mode=mode,
+                align_corners=True,
+            ).permute(*self.warp.permute_imgtov)
 
         # get affine transform
         fixed_t2p: torch.Tensor = fixed_images.get_torch2phy().to(self.dtype)
@@ -193,23 +264,31 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
 
         # save initial affine transform to initialize grid
         affine_map_init = torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))
-        affine_map_inv  = torch.linalg.inv(affine_map_init)
+        affine_map_inv = torch.linalg.inv(affine_map_init)
         # get A^-1 * v[y]
         if self.dims == 2:
-            warp_inv = torch.einsum('bhwx,byx->bhwy', warp_inv, affine_map_inv[:, :-1, :-1])
+            warp_inv = torch.einsum(
+                "bhwx,byx->bhwy", warp_inv, affine_map_inv[:, :-1, :-1]
+            )
         elif self.dims == 3:
-            warp_inv = torch.einsum('bhwdx,byx->bhwdy', warp_inv, affine_map_inv[:, :-1, :-1])
+            warp_inv = torch.einsum(
+                "bhwdx,byx->bhwdy", warp_inv, affine_map_inv[:, :-1, :-1]
+            )
         else:
-            raise ValueError('Invalid number of dimensions: {}'.format(self.dims))
+            raise ValueError("Invalid number of dimensions: {}".format(self.dims))
         #### grid = A^-1 y - A^-1 b = apply A^-1 to regular grid
         return {
-            'affine': affine_map_inv[:, :-1].contiguous(),
-            'grid': warp_inv,
+            "affine": affine_map_inv[:, :-1].contiguous(),
+            "grid": warp_inv,
         }
 
-    def get_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], \
-                                     moving_images: Union[BatchedImages, FakeBatchedImages], \
-                                     shape=None, displacement=False):
+    def get_warp_parameters(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+        displacement=False,
+    ):
         """Get transformed coordinates for warping the moving image.
 
         Computes the coordinate transformation from fixed to moving image space
@@ -239,7 +318,9 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         fixed_t2p = fixed_images.get_torch2phy().to(self.dtype)
         moving_p2t = moving_images.get_phy2torch().to(self.dtype)
         # save initial affine transform to initialize grid
-        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1]).contiguous()
+        affine_map_init = (
+            torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1]
+        ).contiguous()
         # set affine coordinates
         warp_field = self.warp.get_warp()
 
@@ -247,17 +328,30 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         mode = "bilinear" if self.dims == 2 else "trilinear"
         if tuple(warp_field.shape[1:-1]) != tuple(shape[2:]):
             # interpolate this
-            warp_field = F.interpolate(warp_field.permute(*self.warp.permute_vtoimg), size=shape[2:], mode=mode, align_corners=True).permute(*self.warp.permute_imgtov)
+            warp_field = F.interpolate(
+                warp_field.permute(*self.warp.permute_vtoimg),
+                size=shape[2:],
+                mode=mode,
+                align_corners=True,
+            ).permute(*self.warp.permute_imgtov)
 
         # smooth out the warp field if asked to
         if self.smooth_warp_sigma > 0:
-            warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
-            warp_field = separable_filtering(warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian).permute(*self.warp.permute_imgtov)
+            warp_gaussian = [
+                gaussian_1d(s, truncated=2)
+                for s in (
+                    torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype)
+                    + self.smooth_warp_sigma
+                )
+            ]
+            warp_field = separable_filtering(
+                warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian
+            ).permute(*self.warp.permute_imgtov)
 
         # move these coordinates, and return them
         return {
-            'affine': affine_map_init,
-            'grid': warp_field,
+            "affine": affine_map_init,
+            "grid": warp_field,
         }
 
     def optimize(self):
@@ -280,12 +374,22 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
         fixed_size = fixed_arrays.shape[2:]
         moving_size = moving_arrays.shape[2:]
         # save initial affine transform to initialize grid
-        affine_map_init = (torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1]).contiguous().to(self.dtype)
+        affine_map_init = (
+            (torch.matmul(moving_p2t, torch.matmul(self.affine, fixed_t2p))[:, :-1])
+            .contiguous()
+            .to(self.dtype)
+        )
 
         # to save transformed images
         transformed_images = []
         # gaussian filter for smoothing the velocity field
-        warp_gaussian = [gaussian_1d(s, truncated=2) for s in (torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype) + self.smooth_warp_sigma)]
+        warp_gaussian = [
+            gaussian_1d(s, truncated=2)
+            for s in (
+                torch.zeros(self.dims, device=fixed_arrays.device, dtype=self.dtype)
+                + self.smooth_warp_sigma
+            )
+        ]
         # multi-scale optimization
         for scale, iters in zip(self.scales, self.iterations):
             self.convergence_monitor.reset()
@@ -293,14 +397,38 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             size_down = [max(int(s / scale), MIN_IMG_SIZE) for s in fixed_size]
             moving_size_down = [max(int(s / scale), MIN_IMG_SIZE) for s in moving_size]
             if self.blur and scale > 1:
-                sigmas = 0.5 * torch.tensor([sz/szdown for sz, szdown in zip(fixed_size, size_down)], device=fixed_arrays.device, dtype=fixed_arrays.dtype)
+                sigmas = 0.5 * torch.tensor(
+                    [sz / szdown for sz, szdown in zip(fixed_size, size_down)],
+                    device=fixed_arrays.device,
+                    dtype=fixed_arrays.dtype,
+                )
                 gaussians = [gaussian_1d(s, truncated=2) for s in sigmas]
-                fixed_image_down = downsample(fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, gaussians=gaussians)
-                moving_image_blur = downsample(moving_arrays, size=moving_size_down, mode=self.moving_images.interpolate_mode, gaussians=gaussians)
+                fixed_image_down = downsample(
+                    fixed_arrays,
+                    size=size_down,
+                    mode=self.fixed_images.interpolate_mode,
+                    gaussians=gaussians,
+                )
+                moving_image_blur = downsample(
+                    moving_arrays,
+                    size=moving_size_down,
+                    mode=self.moving_images.interpolate_mode,
+                    gaussians=gaussians,
+                )
             else:
                 if scale > 1:
-                    fixed_image_down = F.interpolate(fixed_arrays, size=size_down, mode=self.fixed_images.interpolate_mode, align_corners=True)
-                    moving_image_blur = F.interpolate(moving_arrays, size=moving_size_down, mode=self.moving_images.interpolate_mode, align_corners=True)
+                    fixed_image_down = F.interpolate(
+                        fixed_arrays,
+                        size=size_down,
+                        mode=self.fixed_images.interpolate_mode,
+                        align_corners=True,
+                    )
+                    moving_image_blur = F.interpolate(
+                        moving_arrays,
+                        size=moving_size_down,
+                        mode=self.moving_images.interpolate_mode,
+                        align_corners=True,
+                    )
                 else:
                     fixed_image_down = fixed_arrays
                     moving_image_blur = moving_arrays
@@ -311,7 +439,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
             # fixed_image_affinecoords = F.affine_grid(affine_map_init, fixed_image_down.shape, align_corners=True)
             pbar = tqdm(range(iters)) if self.progress_bar else range(iters)
             # reduce
-            if self.reduction == 'mean':
+            if self.reduction == "mean":
                 scale_factor = 1
             else:
                 scale_factor = np.prod(fixed_image_down.shape)
@@ -321,23 +449,38 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                 warp_field = self.warp.get_warp()  # [N, HWD, 3]
                 # smooth out the warp field if asked to
                 if self.smooth_warp_sigma > 0:
-                    warp_field = separable_filtering(warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian).permute(*self.warp.permute_imgtov)
+                    warp_field = separable_filtering(
+                        warp_field.permute(*self.warp.permute_vtoimg), warp_gaussian
+                    ).permute(*self.warp.permute_imgtov)
                 # move the image
-                moved_image = fireants_interpolator(moving_image_blur, affine=affine_map_init, grid=warp_field, mode='bilinear', align_corners=True, is_displacement=True)
+                moved_image = fireants_interpolator(
+                    moving_image_blur,
+                    affine=affine_map_init,
+                    grid=warp_field,
+                    mode="bilinear",
+                    align_corners=True,
+                    is_displacement=True,
+                )
                 loss = self.loss_fn(moved_image, fixed_image_down)
                 # apply regularization on the warp field
                 if self.displacement_reg is not None:
                     loss = loss + self.displacement_reg(warp_field)
                 if self.warp_reg is not None:
                     # internally should use the fireants interpolator to avoid additional memory allocation
-                    moved_coords = self.get_warped_coordinates(self.fixed_images, self.moving_images)
+                    moved_coords = self.get_warped_coordinates(
+                        self.fixed_images, self.moving_images
+                    )
                     loss = loss + self.warp_reg(moved_coords)
                 # L2 penalty on displacement magnitude (prevents unbounded warp growth)
                 if self.warp_penalty > 0:
                     loss = loss + self.warp_penalty * warp_field.pow(2).mean()
                 loss.backward()
                 if self.progress_bar:
-                    pbar.set_description("scale: {}, iter: {}/{}, loss: {:4f}".format(scale, i, iters, loss.item()/scale_factor))
+                    pbar.set_description(
+                        "scale: {}, iter: {}/{}, loss: {:4f}".format(
+                            scale, i, iters, loss.item() / scale_factor
+                        )
+                    )
                 # optimize the velocity field
                 self.warp.step()
                 # check for convergence
@@ -345,7 +488,7 @@ class GreedyRegistration(AbstractRegistration, DeformableMixin):
                     break
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from fireants.io.image import Image
     from fireants.utils.util import get_gpu_memory
     from time import time
@@ -356,20 +499,41 @@ if __name__ == '__main__':
     for img_dtype in [torch.bfloat16, torch.float32]:
         # Record starting memory
         start_mem = get_gpu_memory(clear=True)
-        path = os.environ['DATAPATH_R']
-        img1 = Image.load_file(f'{path}/BRATS2021/training/BraTS2021_00598/BraTS2021_00598_t1.nii.gz', dtype=img_dtype)
-        img2 = Image.load_file(f'{path}/BRATS2021/training/BraTS2021_00597/BraTS2021_00597_t1.nii.gz', dtype=img_dtype)
-        fixed = BatchedImages([img1, ])
-        moving = BatchedImages([img2,])
+        path = os.environ["DATAPATH_R"]
+        img1 = Image.load_file(
+            f"{path}/BRATS2021/training/BraTS2021_00598/BraTS2021_00598_t1.nii.gz",
+            dtype=img_dtype,
+        )
+        img2 = Image.load_file(
+            f"{path}/BRATS2021/training/BraTS2021_00597/BraTS2021_00597_t1.nii.gz",
+            dtype=img_dtype,
+        )
+        fixed = BatchedImages(
+            [
+                img1,
+            ]
+        )
+        moving = BatchedImages(
+            [
+                img2,
+            ]
+        )
         transform = 0
 
         image_mem = get_gpu_memory(clear=True)
         print(f"Memory for loading images {img_dtype}: {image_mem - start_mem} MB")
         start_mem = image_mem
 
-        transform = AffineRegistration([8, 4, 2, 1], [200, 100, 50, 20], fixed, moving, \
+        transform = AffineRegistration(
+            [8, 4, 2, 1],
+            [200, 100, 50, 20],
+            fixed,
+            moving,
             dtype=img_dtype,
-            loss_type='cc', optimizer='Adam', optimizer_lr=3e-4) #, optimizer_params={'momentum': 0.9})
+            loss_type="cc",
+            optimizer="Adam",
+            optimizer_lr=3e-4,
+        )  # , optimizer_params={'momentum': 0.9})
         transform.optimize()
         # get memory after affine registration
         aff_mem = get_gpu_memory(clear=True)
@@ -379,8 +543,16 @@ if __name__ == '__main__':
         del transform
 
         start_mem = get_gpu_memory(clear=True)
-        reg = GreedyRegistration(scales=[4, 2, 1], iterations=[100, 50, 20], fixed_images=fixed, moving_images=moving, dtype=img_dtype,
-                                    optimizer='Adam', optimizer_lr=0.5, init_affine=init_affine)
+        reg = GreedyRegistration(
+            scales=[4, 2, 1],
+            iterations=[100, 50, 20],
+            fixed_images=fixed,
+            moving_images=moving,
+            dtype=img_dtype,
+            optimizer="Adam",
+            optimizer_lr=0.5,
+            init_affine=init_affine,
+        )
         a = time()
         reg.optimize()
         print(time() - a)

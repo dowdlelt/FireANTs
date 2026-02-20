@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Rohit Jena. All rights reserved.
-# 
+#
 # This file is part of FireANTs, distributed under the terms of
 # the FireANTs License version 1.0. A copy of the license can be found
 # in the LICENSE file at the root of this repository.
@@ -7,10 +7,10 @@
 # IMPORTANT: This code is part of FireANTs and its use, reproduction, or
 # distribution must comply with the full license terms, including:
 # - Maintaining all copyright notices and bibliography references
-# - Using only approved (re)-distribution channels 
+# - Using only approved (re)-distribution channels
 # - Proper attribution in derivative works
 #
-# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE 
+# For full license details, see: https://github.com/rohitrango/FireANTs/blob/main/LICENSE
 
 
 from abc import ABC, abstractmethod
@@ -18,7 +18,13 @@ from typing import List
 import torch
 from torch import nn
 from fireants.utils.util import _assert_check_scales_decreasing
-from fireants.losses import GlobalMutualInformationLoss, LocalNormalizedCrossCorrelationLoss, StretchedCrossCorrelationLoss, NoOp, MeanSquaredError
+from fireants.losses import (
+    GlobalMutualInformationLoss,
+    LocalNormalizedCrossCorrelationLoss,
+    StretchedCrossCorrelationLoss,
+    NoOp,
+    MeanSquaredError,
+)
 from torch.optim import SGD, Adam
 from fireants.io.image import BatchedImages, FakeBatchedImages
 from typing import Optional, Union
@@ -32,8 +38,10 @@ import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 def dummy_loss(*args):
     return 0
+
 
 class AbstractRegistration(ABC):
     """Base class for all registration algorithms in FireANTs.
@@ -41,8 +49,8 @@ class AbstractRegistration(ABC):
     This abstract class provides the core functionality and interface for image registration,
     handling all the common functionality for all linear and non-linear registration algorithms.
     It handles features like
-        - multi-resolution optimization, 
-        - arbitrary similarity metrics, and 
+        - multi-resolution optimization,
+        - arbitrary similarity metrics, and
         - convergence monitoring.
 
     Args:
@@ -90,30 +98,37 @@ class AbstractRegistration(ABC):
         The fixed and moving images must be broadcastable in batch dimension.
     """
 
-    def __init__(self,
-                scales: List[int], iterations: List[float],
-                fixed_images: BatchedImages, moving_images: BatchedImages,
-                loss_type: str = "cc",
-                mi_kernel_type: str = 'gaussian', cc_kernel_type: str = 'rectangular',
-                custom_loss: nn.Module = None,
-                loss_params: dict = {},
-                cc_kernel_size: int = 3,
-                reduction: str = 'mean',
-                tolerance: float = 1e-6, max_tolerance_iters: int = 10,
-                flat_convergence: bool = False,
-                alt_gaussian: bool = False,
-                progress_bar: bool = True,
-                dtype: torch.dtype = torch.float32,
-                **kwargs
-                ) -> None:
-        '''
+    def __init__(
+        self,
+        scales: List[int],
+        iterations: List[float],
+        fixed_images: BatchedImages,
+        moving_images: BatchedImages,
+        loss_type: str = "cc",
+        mi_kernel_type: str = "gaussian",
+        cc_kernel_type: str = "rectangular",
+        custom_loss: nn.Module = None,
+        loss_params: dict = {},
+        cc_kernel_size: int = 3,
+        reduction: str = "mean",
+        tolerance: float = 1e-6,
+        max_tolerance_iters: int = 10,
+        flat_convergence: bool = False,
+        alt_gaussian: bool = False,
+        progress_bar: bool = True,
+        dtype: torch.dtype = torch.float32,
+        **kwargs,
+    ) -> None:
+        """
         Initialize abstract registration class
-        '''
+        """
         super().__init__()
         self.scales = scales
         _assert_check_scales_decreasing(self.scales)
         self.iterations = iterations
-        assert len(self.iterations) == len(self.scales), "Number of iterations must match number of scales"
+        assert len(self.iterations) == len(self.scales), (
+            "Number of iterations must match number of scales"
+        )
         # check for fixed and moving image sizes
         self.fixed_images = fixed_images
         self.moving_images = moving_images
@@ -121,81 +136,128 @@ class AbstractRegistration(ABC):
 
         # check if sizes are broadcastable
         fsize, msize = self.fixed_images.size(), self.moving_images.size()
-        assert (fsize == msize) or (fsize == 1) or (msize == 1), "Number of fixed and moving images must match or broadcastable"
+        assert (fsize == msize) or (fsize == 1) or (msize == 1), (
+            "Number of fixed and moving images must match or broadcastable"
+        )
         self.opt_size = max(fsize, msize)
-        
+
         self.tolerance = tolerance
         self.max_tolerance_iters = max_tolerance_iters
         self.flat_convergence = flat_convergence
-        self.convergence_monitor = ConvergenceMonitor(self.max_tolerance_iters, self.tolerance, self.flat_convergence)
+        self.convergence_monitor = ConvergenceMonitor(
+            self.max_tolerance_iters, self.tolerance, self.flat_convergence
+        )
 
         self.device = fixed_images.device
         self.dtype = dtype
         if not is_torch_float_type(self.dtype):
-            raise ValueError(f"non-float dtype {self.dtype} is not supported for registration")
+            raise ValueError(
+                f"non-float dtype {self.dtype} is not supported for registration"
+            )
 
         self.dims = self.fixed_images.dims
-        self.progress_bar = progress_bar        # variable to show or hide progress bar
+        self.progress_bar = progress_bar  # variable to show or hide progress bar
         # initialize losses
-        if loss_type == 'mi':
-            self.loss_fn = GlobalMutualInformationLoss(kernel_type=mi_kernel_type, reduction=reduction, **loss_params)
-        elif loss_type == 'cc':
-            self.loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
-                                                               kernel_size=cc_kernel_size, reduction=reduction, 
-                                                               alt_gaussian=alt_gaussian, **loss_params)
-        elif loss_type == 'scc':
-            self.loss_fn = StretchedCrossCorrelationLoss(kernel_type=cc_kernel_type, spatial_dims=self.dims,
-                                                         kernel_size=cc_kernel_size, reduction=reduction, 
-                                                         alt_gaussian=alt_gaussian, **loss_params)
-        elif loss_type == 'fusedcc':
+        if loss_type == "mi":
+            self.loss_fn = GlobalMutualInformationLoss(
+                kernel_type=mi_kernel_type, reduction=reduction, **loss_params
+            )
+        elif loss_type == "cc":
+            self.loss_fn = LocalNormalizedCrossCorrelationLoss(
+                kernel_type=cc_kernel_type,
+                spatial_dims=self.dims,
+                kernel_size=cc_kernel_size,
+                reduction=reduction,
+                alt_gaussian=alt_gaussian,
+                **loss_params,
+            )
+        elif loss_type == "scc":
+            self.loss_fn = StretchedCrossCorrelationLoss(
+                kernel_type=cc_kernel_type,
+                spatial_dims=self.dims,
+                kernel_size=cc_kernel_size,
+                reduction=reduction,
+                alt_gaussian=alt_gaussian,
+                **loss_params,
+            )
+        elif loss_type == "fusedcc":
             from fireants.losses.fusedcc import FusedLocalNormalizedCrossCorrelationLoss
-            self.loss_fn = FusedLocalNormalizedCrossCorrelationLoss(spatial_dims=self.dims, 
-                                                    kernel_size=cc_kernel_size, reduction=reduction, **loss_params)
-        elif loss_type == 'fusedmi':
+
+            self.loss_fn = FusedLocalNormalizedCrossCorrelationLoss(
+                spatial_dims=self.dims,
+                kernel_size=cc_kernel_size,
+                reduction=reduction,
+                **loss_params,
+            )
+        elif loss_type == "fusedmi":
             from fireants.losses.fusedmi import FusedGlobalMutualInformationLoss
-            self.loss_fn = FusedGlobalMutualInformationLoss(kernel_type=mi_kernel_type, reduction=reduction, **loss_params)
-        elif loss_type == 'custom':
+
+            self.loss_fn = FusedGlobalMutualInformationLoss(
+                kernel_type=mi_kernel_type, reduction=reduction, **loss_params
+            )
+        elif loss_type == "custom":
             self.loss_fn = custom_loss
-        elif loss_type == 'noop':
+        elif loss_type == "noop":
             self.loss_fn = NoOp()
-        elif loss_type == 'mse':
+        elif loss_type == "mse":
             # self.loss_fn = partial(F.mse_loss, reduction=reduction)
             self.loss_fn = MeanSquaredError(reduction=reduction)
         else:
             raise ValueError(f"Loss type {loss_type} not supported")
-        
+
         # see if loss can store the iterations
-        if hasattr(self.loss_fn, 'set_iterations'):
+        if hasattr(self.loss_fn, "set_iterations"):
             logger.info("Setting iterations for loss function")
             self.loss_fn.set_iterations(self.iterations)
-        if hasattr(self.loss_fn, 'set_scales'):
+        if hasattr(self.loss_fn, "set_scales"):
             logger.info("Setting scales for loss function")
             self.loss_fn.set_scales(self.scales)
 
         self.print_init_msg()
 
     def print_init_msg(self):
-        logger.info(f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}")
+        logger.info(
+            f"Registration of type {self.__class__.__name__} initialized with dtype {self.dtype}"
+        )
 
     @abstractmethod
     def optimize(self):
-        ''' 
+        """
         Abstract method to perform registration optimization
-        '''
+        """
         pass
 
     @abstractmethod
-    def get_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
-        ''' Get dictionary of parameters to pass into fireants_interpolator '''
-        raise NotImplementedError("This method must be implemented by the registration class")
-    
-    @abstractmethod
-    def get_inverse_warp_parameters(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
-        ''' Get dictionary of parameters to pass into fireants_interpolator '''
-        raise NotImplementedError("This method must be implemented by the registration class")
+    def get_warp_parameters(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+    ):
+        """Get dictionary of parameters to pass into fireants_interpolator"""
+        raise NotImplementedError(
+            "This method must be implemented by the registration class"
+        )
 
-    def get_warped_coordinates(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
-        '''Get the transformed coordinates for warping the moving image.
+    @abstractmethod
+    def get_inverse_warp_parameters(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+    ):
+        """Get dictionary of parameters to pass into fireants_interpolator"""
+        raise NotImplementedError(
+            "This method must be implemented by the registration class"
+        )
+
+    def get_warped_coordinates(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+    ):
+        """Get the transformed coordinates for warping the moving image.
 
         This abstract method must be implemented by all registration classes to define how
         coordinates are transformed from the fixed image space to the moving image space.
@@ -221,83 +283,117 @@ class AbstractRegistration(ABC):
             - Coordinates are returned in the normalized [-1, 1] coordinate system required by grid_sample
             - The transformation maps from fixed image space to moving image space (backward transform)
             - Physical space transformations are handled internally using the image metadata
-        '''
+        """
         params = self.get_warp_parameters(fixed_images, moving_images, shape)
-        if 'affine' in params and 'grid' not in params:
-            return F.affine_grid(params['affine'], params['out_shape'], align_corners=True)
-        elif 'affine' in params and 'grid' in params:
+        if "affine" in params and "grid" not in params:
+            return F.affine_grid(
+                params["affine"], params["out_shape"], align_corners=True
+            )
+        elif "affine" in params and "grid" in params:
             # this is just a warp field
-            affine = params['affine']
-            grid = params['grid']
+            affine = params["affine"]
+            grid = params["grid"]
             grid = fireants_interpolator.affine_warp(affine, grid, align_corners=True)
             return grid
         else:
             raise ValueError(f"Invalid warp parameters with keys {params.keys()}")
 
-    def get_inverse_warped_coordinates(self, fixed_images: Union[BatchedImages, FakeBatchedImages], moving_images: Union[BatchedImages, FakeBatchedImages], shape=None):
-        ''' Get inverse warped coordinates for the moving image.
+    def get_inverse_warped_coordinates(
+        self,
+        fixed_images: Union[BatchedImages, FakeBatchedImages],
+        moving_images: Union[BatchedImages, FakeBatchedImages],
+        shape=None,
+    ):
+        """Get inverse warped coordinates for the moving image.
 
         This method is useful to analyse the effect of how the moving coordinates (fixed images) are transformed
-        '''
+        """
         params = self.get_inverse_warp_parameters(fixed_images, moving_images, shape)
-        if 'affine' in params and 'grid' not in params:
-            return F.affine_grid(params['affine'], params['out_shape'], align_corners=True)
-        elif 'affine' in params and 'grid' in params:
+        if "affine" in params and "grid" not in params:
+            return F.affine_grid(
+                params["affine"], params["out_shape"], align_corners=True
+            )
+        elif "affine" in params and "grid" in params:
             # this is just a warp field
-            affine = params['affine']
-            grid = params['grid']
+            affine = params["affine"]
+            grid = params["grid"]
             shape = [affine.shape[0], 1] + list(grid.shape[1:-1])
             grid = fireants_interpolator.affine_warp(affine, grid, align_corners=True)
             return grid
         else:
             raise ValueError(f"Invalid warp parameters with keys {params.keys()}")
 
-    def save_moved_images(self, moved_images: Union[BatchedImages, FakeBatchedImages, torch.Tensor], filenames: Union[str, List[str]], moving_to_fixed: bool = True, ignore_size_match: bool = False):
-        '''
+    def save_moved_images(
+        self,
+        moved_images: Union[BatchedImages, FakeBatchedImages, torch.Tensor],
+        filenames: Union[str, List[str]],
+        moving_to_fixed: bool = True,
+        ignore_size_match: bool = False,
+    ):
+        """
         Save the moved images to disk.
 
         Args:
             moved_images (Union[BatchedImages, FakeBatchedImages, torch.Tensor]): The moved images to save.
             filenames (Union[str, List[str]]): The filenames to save the moved images to.
             moving_to_fixed (bool, optional): If True, the moving images are saved to the fixed image space. Defaults to True.
-                if False, we are dealing with an image that is moved from fixed space to moving space            
-        '''
+                if False, we are dealing with an image that is moved from fixed space to moving space
+        """
         if isinstance(moved_images, BatchedImages):
-            moved_images_save = FakeBatchedImages(moved_images(), moved_images, ignore_size_match)   # roundabout way to call the fakebatchedimages
+            moved_images_save = FakeBatchedImages(
+                moved_images(), moved_images, ignore_size_match
+            )  # roundabout way to call the fakebatchedimages
         elif isinstance(moved_images, torch.Tensor):
-            moved_images_save = FakeBatchedImages(moved_images, self.fixed_images if moving_to_fixed else self.moving_images, ignore_size_match)
+            moved_images_save = FakeBatchedImages(
+                moved_images,
+                self.fixed_images if moving_to_fixed else self.moving_images,
+                ignore_size_match,
+            )
         else:
             # if it is already a fakebatchedimages, we can just use it
             moved_images_save = moved_images
         moved_images_save.write_image(filenames)
 
-
-    def evaluate_inverse(self, fixed_images: Union[BatchedImages, torch.Tensor], moving_images: Union[BatchedImages, torch.Tensor], shape=None, **kwargs):
-        ''' Apply the inverse of the learned transformation to new images.
+    def evaluate_inverse(
+        self,
+        fixed_images: Union[BatchedImages, torch.Tensor],
+        moving_images: Union[BatchedImages, torch.Tensor],
+        shape=None,
+        **kwargs,
+    ):
+        """Apply the inverse of the learned transformation to new images.
 
         This method is useful to analyse the effect of how the moving coordinates (fixed images) are transformed
-        '''
+        """
         if isinstance(fixed_images, torch.Tensor):
             fixed_images = FakeBatchedImages(fixed_images, self.fixed_images)
         if isinstance(moving_images, torch.Tensor):
             moving_images = FakeBatchedImages(moving_images, self.moving_images)
 
         fixed_arrays = moving_images()
-        fixed_moved_coords = self.get_inverse_warp_parameters(fixed_images, moving_images, shape=shape, **kwargs)
-        fixed_moved_image = fireants_interpolator(fixed_arrays, **fixed_moved_coords, mode='bilinear', align_corners=True)  # [N, C, H, W, [D]]
+        fixed_moved_coords = self.get_inverse_warp_parameters(
+            fixed_images, moving_images, shape=shape, **kwargs
+        )
+        fixed_moved_image = fireants_interpolator(
+            fixed_arrays, **fixed_moved_coords, mode="bilinear", align_corners=True
+        )  # [N, C, H, W, [D]]
         return fixed_moved_image
 
-
-    def evaluate(self, fixed_images: Union[BatchedImages, torch.Tensor], moving_images: Union[BatchedImages, torch.Tensor], shape=None):
-        '''Apply the learned transformation to new images.
+    def evaluate(
+        self,
+        fixed_images: Union[BatchedImages, torch.Tensor],
+        moving_images: Union[BatchedImages, torch.Tensor],
+        shape=None,
+    ):
+        """Apply the learned transformation to new images.
 
         This method applies the registration transformation learned during optimization
         to a new set of images. It can be used to:
             - Validate registration performance on test images
             - Apply learned transformations to new data
             - Transform auxiliary data (e.g. segmentation masks) using learned parameters
-        
-        All registration classes will implement their own `get_warped_coordinates` method, 
+
+        All registration classes will implement their own `get_warped_coordinates` method,
         which is used to apply the learned transformation to new images.
 
         Args:
@@ -316,14 +412,18 @@ class AbstractRegistration(ABC):
         Note:
             The transformation is applied using bilinear interpolation with align_corners=True
             to maintain consistency with the optimization process.
-        '''
+        """
         if isinstance(fixed_images, torch.Tensor):
             fixed_images = FakeBatchedImages(fixed_images, self.fixed_images)
         if isinstance(moving_images, torch.Tensor):
             moving_images = FakeBatchedImages(moving_images, self.moving_images)
 
         moving_arrays = moving_images()
-        moved_coords = self.get_warp_parameters(fixed_images, moving_images, shape=shape)
+        moved_coords = self.get_warp_parameters(
+            fixed_images, moving_images, shape=shape
+        )
         interpolate_mode = moving_images.get_interpolator_type()
-        moved_image = fireants_interpolator(moving_arrays, **moved_coords, mode=interpolate_mode, align_corners=True)  # [N, C, H, W, [D]]
+        moved_image = fireants_interpolator(
+            moving_arrays, **moved_coords, mode=interpolate_mode, align_corners=True
+        )  # [N, C, H, W, [D]]
         return moved_image
